@@ -176,13 +176,15 @@ fn parse_active_conversations(values: &[OwnedValue]) -> Vec<Conversation> {
     for val in values {
         if let Some(msg) = parse_message_from_value(val) {
             let thread_id = msg.thread_id;
-            let is_group = msg.is_group();
 
             let conv = conversations_map
                 .entry(thread_id)
                 .or_insert_with(|| Conversation::new(thread_id));
 
-            conv.is_group = is_group;
+            // Determine group status by address count rather than the event
+            // bitmask, since Android sets EventMultiTarget on MMS messages
+            // even in 1:1 conversations.
+            conv.is_group = conv.is_group || msg.addresses.len() > 1;
 
             let is_newer = conv
                 .latest_message
@@ -213,12 +215,18 @@ mod tests {
     /// Build a conversation variant matching what kdeconnect actually sends:
     /// variant { struct(event, body, addresses, date, type, read, threadID, uID, subID, attachments) }
     fn make_conversation_variant(thread_id: i64, date: i64, body: &str, event: i32) -> OwnedValue {
-        let addr = Value::Structure(
-            StructureBuilder::new()
-                .add_field(Value::Str("+15551234".into()))
-                .build().unwrap(),
-        );
-        let addresses = Value::Array(vec![addr].into());
+        make_conversation_variant_addrs(thread_id, date, body, event, &["+15551234"])
+    }
+
+    fn make_conversation_variant_addrs(thread_id: i64, date: i64, body: &str, event: i32, addrs: &[&str]) -> OwnedValue {
+        let addr_values: Vec<Value<'_>> = addrs.iter().map(|a| {
+            Value::Structure(
+                StructureBuilder::new()
+                    .add_field(Value::Str((*a).into()))
+                    .build().unwrap(),
+            )
+        }).collect();
+        let addresses = Value::Array(addr_values.into());
         let attachments: Value<'_> = Value::Array(
             Array::new(&Signature::from_bytes(b"(xsss)").unwrap())
         );
@@ -264,12 +272,24 @@ mod tests {
     #[test]
     fn test_parse_active_conversations_group() {
         let values = vec![
-            make_conversation_variant(1, 1000, "group msg", 0x3),
+            make_conversation_variant_addrs(1, 1000, "group msg", 0x3, &["+15551111", "+15552222"]),
         ];
 
         let convos = parse_active_conversations(&values);
         assert_eq!(convos.len(), 1);
         assert!(convos[0].is_group);
+    }
+
+    #[test]
+    fn test_single_address_not_group_even_with_multitarget_event() {
+        // Android sets EventMultiTarget on MMS messages even in 1:1 conversations
+        let values = vec![
+            make_conversation_variant(1, 1000, "mms msg", 0x3),
+        ];
+
+        let convos = parse_active_conversations(&values);
+        assert_eq!(convos.len(), 1);
+        assert!(!convos[0].is_group);
     }
 
     #[test]

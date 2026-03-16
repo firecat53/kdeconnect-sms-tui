@@ -381,7 +381,7 @@ impl App {
 
         // Check if we already have this thread
         if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
-            conv.is_group = msg.is_group();
+            conv.is_group = conv.is_group || msg.addresses.len() > 1;
             let is_newer = conv
                 .latest_message
                 .as_ref()
@@ -392,7 +392,7 @@ impl App {
             insert_message_sorted(&mut conv.messages, msg);
         } else {
             let mut conv = Conversation::new(thread_id);
-            conv.is_group = msg.is_group();
+            conv.is_group = msg.addresses.len() > 1;
             conv.latest_message = Some(msg.clone());
             conv.messages.push(msg);
             self.conversations.push(conv);
