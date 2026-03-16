@@ -32,7 +32,7 @@ impl ConversationsClient {
     }
 
     fn device_path(&self) -> String {
-        format!("/modules/kdeconnect/devices/{}/sms", self.device_id)
+        format!("/modules/kdeconnect/devices/{}", self.device_id)
     }
 
     /// Request kdeconnect to fetch all conversation threads from the phone.
@@ -119,7 +119,8 @@ impl ConversationsClient {
         thread_id: i64,
         message: &str,
     ) -> Result<()> {
-        let attachments: Vec<String> = Vec::new();
+        // QVariantList maps to D-Bus type `av` (array of variants)
+        let attachments: Vec<zbus::zvariant::Value<'_>> = Vec::new();
         timeout(DBUS_TIMEOUT, self.connection
             .call_method(
                 Some(KDECONNECT_SERVICE),
@@ -140,7 +141,8 @@ impl ConversationsClient {
         addresses: &[String],
         message: &str,
     ) -> Result<()> {
-        let attachments: Vec<String> = Vec::new();
+        // QVariantList maps to D-Bus type `av` (array of variants)
+        let attachments: Vec<zbus::zvariant::Value<'_>> = Vec::new();
         timeout(DBUS_TIMEOUT, self.connection
             .call_method(
                 Some(KDECONNECT_SERVICE),
