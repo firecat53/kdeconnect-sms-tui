@@ -1,4 +1,4 @@
-use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent};
+use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent, KeyEventKind};
 use futures_lite::StreamExt;
 use tokio::sync::mpsc;
 
@@ -40,7 +40,7 @@ pub fn spawn_event_loop(tick_rate: std::time::Duration) -> mpsc::UnboundedReceiv
             tokio::select! {
                 maybe_event = reader.next() => {
                     match maybe_event {
-                        Some(Ok(CrosstermEvent::Key(key))) => {
+                        Some(Ok(CrosstermEvent::Key(key))) if key.kind == KeyEventKind::Press => {
                             if tx.send(AppEvent::Key(key)).is_err() {
                                 break;
                             }
