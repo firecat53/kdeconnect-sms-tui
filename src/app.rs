@@ -27,6 +27,13 @@ pub enum LoadingState {
     Error(String),
 }
 
+/// Which panel has keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    ConversationList,
+    Compose,
+}
+
 pub struct App {
     pub config: Config,
     pub devices: Vec<Device>,
@@ -38,6 +45,10 @@ pub struct App {
     pub should_quit: bool,
     pub loading: LoadingState,
     pub status_message: Option<String>,
+    pub focus: Focus,
+    pub compose_input: String,
+    /// Cursor position in compose_input (byte offset)
+    pub compose_cursor: usize,
     daemon: Option<DaemonClient>,
     conversations_client: Option<ConversationsClient>,
     /// Sender for injecting D-Bus signal events
@@ -76,6 +87,9 @@ impl App {
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
+            focus: Focus::ConversationList,
+            compose_input: String::new(),
+            compose_cursor: 0,
             daemon,
             conversations_client: None,
             signal_tx: None,
@@ -113,6 +127,9 @@ impl App {
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
+            focus: Focus::ConversationList,
+            compose_input: String::new(),
+            compose_cursor: 0,
             daemon: None,
             conversations_client: None,
             signal_tx: None,
@@ -292,12 +309,14 @@ impl App {
                 .as_ref()
                 .is_none_or(|existing| msg.date > existing.date);
             if is_newer {
-                conv.latest_message = Some(msg);
+                conv.latest_message = Some(msg.clone());
             }
+            insert_message_sorted(&mut conv.messages, msg);
         } else {
             let mut conv = Conversation::new(thread_id);
             conv.is_group = msg.is_group();
-            conv.latest_message = Some(msg);
+            conv.latest_message = Some(msg.clone());
+            conv.messages.push(msg);
             self.conversations.push(conv);
         }
 
@@ -314,8 +333,9 @@ impl App {
                 .as_ref()
                 .is_none_or(|existing| msg.date > existing.date);
             if is_newer {
-                conv.latest_message = Some(msg);
+                conv.latest_message = Some(msg.clone());
             }
+            insert_message_sorted(&mut conv.messages, msg);
         } else {
             // New thread we didn't know about
             self.handle_conversation_created(msg);
@@ -323,6 +343,26 @@ impl App {
         }
 
         sort_by_recent(&mut self.conversations);
+    }
+
+    /// Load message history for the currently selected conversation.
+    async fn load_selected_conversation_messages(&mut self) {
+        let Some(idx) = self.selected_conversation_idx else {
+            return;
+        };
+        let Some(conv) = self.conversations.get(idx) else {
+            return;
+        };
+        let Some(ref client) = self.conversations_client else {
+            return;
+        };
+
+        let thread_id = conv.thread_id;
+
+        // Request messages: start=0, end=50 for initial batch
+        if let Err(e) = client.request_conversation(thread_id, 0, 50).await {
+            tracing::warn!("Failed to request conversation {}: {}", thread_id, e);
+        }
     }
 
     /// Handle a conversation being removed.
@@ -349,12 +389,25 @@ impl App {
         key: KeyEvent,
         signal_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
     ) {
+        // Ctrl-C always quits
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.should_quit = true;
+            return;
+        }
+
+        match self.focus {
+            Focus::ConversationList => self.handle_key_normal(key, signal_tx).await,
+            Focus::Compose => self.handle_key_compose(key).await,
+        }
+    }
+
+    async fn handle_key_normal(
+        &mut self,
+        key: KeyEvent,
+        signal_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    ) {
         match key.code {
-            // Quit
             KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.should_quit = true;
-            }
 
             // Device switching
             KeyCode::Tab => {
@@ -363,8 +416,22 @@ impl App {
             }
 
             // Conversation navigation
-            KeyCode::Up | KeyCode::Char('k') => self.select_prev_conversation(),
-            KeyCode::Down | KeyCode::Char('j') => self.select_next_conversation(),
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.select_prev_conversation();
+                self.load_selected_conversation_messages().await;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.select_next_conversation();
+                self.load_selected_conversation_messages().await;
+            }
+
+            // Enter conversation / focus compose
+            KeyCode::Enter | KeyCode::Char('i') => {
+                if self.selected_conversation_idx.is_some() {
+                    self.focus = Focus::Compose;
+                    self.load_selected_conversation_messages().await;
+                }
+            }
 
             // Refresh conversations
             KeyCode::Char('r') => {
@@ -372,6 +439,96 @@ impl App {
             }
 
             // Message scrolling
+            KeyCode::PageUp => {
+                self.message_scroll = self.message_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                self.message_scroll = self.message_scroll.saturating_add(10);
+            }
+
+            _ => {}
+        }
+    }
+
+    async fn handle_key_compose(&mut self, key: KeyEvent) {
+        match key.code {
+            // Escape returns to conversation list
+            KeyCode::Esc => {
+                self.focus = Focus::ConversationList;
+            }
+
+            // Enter sends the message
+            KeyCode::Enter => {
+                if key.modifiers.contains(KeyModifiers::ALT)
+                    || key.modifiers.contains(KeyModifiers::SHIFT)
+                {
+                    // Alt+Enter or Shift+Enter: newline
+                    self.compose_input.insert(self.compose_cursor, '\n');
+                    self.compose_cursor += 1;
+                } else {
+                    self.send_message().await;
+                }
+            }
+
+            // Backspace
+            KeyCode::Backspace => {
+                if self.compose_cursor > 0 {
+                    // Find previous char boundary
+                    let prev = self.compose_input[..self.compose_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.compose_input.drain(prev..self.compose_cursor);
+                    self.compose_cursor = prev;
+                }
+            }
+
+            // Delete
+            KeyCode::Delete => {
+                if self.compose_cursor < self.compose_input.len() {
+                    let next = self.compose_input[self.compose_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.compose_cursor + i)
+                        .unwrap_or(self.compose_input.len());
+                    self.compose_input.drain(self.compose_cursor..next);
+                }
+            }
+
+            // Cursor movement
+            KeyCode::Left => {
+                if self.compose_cursor > 0 {
+                    self.compose_cursor = self.compose_input[..self.compose_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+            KeyCode::Right => {
+                if self.compose_cursor < self.compose_input.len() {
+                    self.compose_cursor = self.compose_input[self.compose_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.compose_cursor + i)
+                        .unwrap_or(self.compose_input.len());
+                }
+            }
+            KeyCode::Home => {
+                self.compose_cursor = 0;
+            }
+            KeyCode::End => {
+                self.compose_cursor = self.compose_input.len();
+            }
+
+            // Text input
+            KeyCode::Char(c) => {
+                self.compose_input.insert(self.compose_cursor, c);
+                self.compose_cursor += c.len_utf8();
+            }
+
+            // Message scrolling while composing
             KeyCode::PageUp => {
                 self.message_scroll = self.message_scroll.saturating_sub(10);
             }
@@ -397,6 +554,42 @@ impl App {
         self.selected_conversation_idx = None;
         self.conversations_client = None;
         self.message_scroll = 0;
+        self.focus = Focus::ConversationList;
+        self.compose_input.clear();
+        self.compose_cursor = 0;
+    }
+
+    /// Send the current compose input as a reply.
+    async fn send_message(&mut self) {
+        let text = self.compose_input.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+
+        let Some(idx) = self.selected_conversation_idx else {
+            self.status_message = Some("No conversation selected".into());
+            return;
+        };
+        let Some(conv) = self.conversations.get(idx) else {
+            return;
+        };
+        let Some(ref client) = self.conversations_client else {
+            self.status_message = Some("Not connected to device".into());
+            return;
+        };
+
+        let thread_id = conv.thread_id;
+
+        match client.reply_to_conversation(thread_id, &text).await {
+            Ok(()) => {
+                self.compose_input.clear();
+                self.compose_cursor = 0;
+                self.status_message = Some("Message sent".into());
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Send failed: {}", e));
+            }
+        }
     }
 
     fn select_prev_conversation(&mut self) {
@@ -423,6 +616,16 @@ impl App {
         self.selected_conversation_idx = Some(new_idx);
         self.message_scroll = 0;
     }
+}
+
+/// Insert a message into a sorted (by date ascending) list, avoiding duplicates by uid.
+fn insert_message_sorted(messages: &mut Vec<Message>, msg: Message) {
+    // Avoid duplicates
+    if messages.iter().any(|m| m.uid == msg.uid && m.date == msg.date) {
+        return;
+    }
+    let pos = messages.partition_point(|m| m.date <= msg.date);
+    messages.insert(pos, msg);
 }
 
 #[cfg(test)]
@@ -634,5 +837,108 @@ mod tests {
 
         assert_eq!(app.conversations[0].thread_id, 1);
         assert_eq!(app.conversations[0].preview_text(), "now newest");
+    }
+
+    #[test]
+    fn test_insert_message_sorted() {
+        let mut messages = Vec::new();
+
+        insert_message_sorted(&mut messages, make_test_message(1, 3000, "third"));
+        insert_message_sorted(&mut messages, make_test_message(1, 1000, "first"));
+        insert_message_sorted(&mut messages, make_test_message(1, 2000, "second"));
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].body, "first");
+        assert_eq!(messages[1].body, "second");
+        assert_eq!(messages[2].body, "third");
+    }
+
+    #[test]
+    fn test_insert_message_deduplication() {
+        let mut messages = Vec::new();
+
+        let msg = make_test_message(1, 1000, "hello");
+        insert_message_sorted(&mut messages, msg.clone());
+        insert_message_sorted(&mut messages, msg); // duplicate
+
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn test_conversation_signals_populate_messages() {
+        let mut app = App::new_test();
+
+        app.handle_conversation_created(make_test_message(1, 1000, "first"));
+        app.handle_conversation_updated(make_test_message(1, 2000, "second"));
+        app.handle_conversation_updated(make_test_message(1, 3000, "third"));
+
+        assert_eq!(app.conversations[0].messages.len(), 3);
+        assert_eq!(app.conversations[0].messages[0].body, "first");
+        assert_eq!(app.conversations[0].messages[2].body, "third");
+    }
+
+    #[test]
+    fn test_focus_transitions() {
+        let mut app = App::new_test();
+        assert_eq!(app.focus, Focus::ConversationList);
+
+        // Can't enter compose without a conversation selected
+        app.focus = Focus::Compose;
+        assert_eq!(app.focus, Focus::Compose);
+
+        // Esc goes back
+        app.focus = Focus::ConversationList;
+        assert_eq!(app.focus, Focus::ConversationList);
+    }
+
+    #[test]
+    fn test_compose_input_basic() {
+        let mut app = App::new_test();
+        app.compose_input = "hello".into();
+        app.compose_cursor = 5;
+
+        assert_eq!(app.compose_input, "hello");
+        assert_eq!(app.compose_cursor, 5);
+
+        // Simulate backspace
+        let prev = app.compose_input[..app.compose_cursor]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        app.compose_input.drain(prev..app.compose_cursor);
+        app.compose_cursor = prev;
+
+        assert_eq!(app.compose_input, "hell");
+        assert_eq!(app.compose_cursor, 4);
+    }
+
+    #[test]
+    fn test_cycle_device_resets_compose() {
+        let mut app = App::new_test();
+        app.devices = vec![
+            Device {
+                id: "a".into(),
+                name: "A".into(),
+                reachable: true,
+                paired: true,
+            },
+            Device {
+                id: "b".into(),
+                name: "B".into(),
+                reachable: true,
+                paired: true,
+            },
+        ];
+        app.selected_device_idx = Some(0);
+        app.focus = Focus::Compose;
+        app.compose_input = "draft message".into();
+        app.compose_cursor = 13;
+
+        app.cycle_device();
+
+        assert_eq!(app.focus, Focus::ConversationList);
+        assert!(app.compose_input.is_empty());
+        assert_eq!(app.compose_cursor, 0);
     }
 }

@@ -57,7 +57,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             ));
         } else {
             spans.push(Span::styled(
-                "  [Tab: switch | r: refresh | q: quit]",
+                "  [Tab: switch | Enter/i: compose | r: refresh | q: quit]",
                 theme::help_style(),
             ));
         }

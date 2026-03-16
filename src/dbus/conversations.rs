@@ -105,6 +105,46 @@ impl ConversationsClient {
         Ok(())
     }
 
+    /// Reply to an existing conversation thread.
+    pub async fn reply_to_conversation(
+        &self,
+        thread_id: i64,
+        message: &str,
+    ) -> Result<()> {
+        let attachments: Vec<String> = Vec::new();
+        self.connection
+            .call_method(
+                Some(KDECONNECT_SERVICE),
+                self.device_path().as_str(),
+                Some(CONVERSATIONS_INTERFACE),
+                "replyToConversation",
+                &(thread_id, message, &attachments),
+            )
+            .await?;
+        info!("Sent reply to thread {}", thread_id);
+        Ok(())
+    }
+
+    /// Send a message to a new conversation (by address).
+    pub async fn send_without_conversation(
+        &self,
+        addresses: &[String],
+        message: &str,
+    ) -> Result<()> {
+        let attachments: Vec<String> = Vec::new();
+        self.connection
+            .call_method(
+                Some(KDECONNECT_SERVICE),
+                self.device_path().as_str(),
+                Some(CONVERSATIONS_INTERFACE),
+                "sendWithoutConversation",
+                &(addresses, message, &attachments),
+            )
+            .await?;
+        info!("Sent message to {:?}", addresses);
+        Ok(())
+    }
+
     pub fn device_id(&self) -> &str {
         &self.device_id
     }

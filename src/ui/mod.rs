@@ -1,6 +1,7 @@
 pub mod device_bar;
 pub mod conversation_list;
 pub mod message_view;
+pub mod compose;
 pub mod theme;
 
 #[cfg(test)]
@@ -24,15 +25,26 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     device_bar::draw(f, app, chunks[0]);
 
-    // Split main content: conversation list (left) | message view (right)
+    // Split main content: conversation list (left) | message + compose (right)
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Percentage(30), // conversation list
-            Constraint::Percentage(70), // message view
+            Constraint::Percentage(70), // message view + compose
         ])
         .split(chunks[1]);
 
     conversation_list::draw(f, app, main_chunks[0]);
-    message_view::draw(f, app, main_chunks[1]);
+
+    // Split right panel: messages (top) | compose (bottom)
+    let right_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),    // message view
+            Constraint::Length(4), // compose input
+        ])
+        .split(main_chunks[1]);
+
+    message_view::draw(f, app, right_chunks[0]);
+    compose::draw(f, app, right_chunks[1]);
 }
