@@ -27,10 +27,13 @@ pub enum AppEvent {
 }
 
 /// Spawns an event loop that listens for terminal events and periodic ticks.
+///
+/// Uses `spawn_blocking` because crossterm's `poll`/`read` are blocking I/O
+/// that must not run on the async executor.
 pub fn spawn_event_loop(tick_rate: Duration) -> mpsc::UnboundedReceiver<AppEvent> {
     let (tx, rx) = mpsc::unbounded_channel();
 
-    tokio::spawn(async move {
+    tokio::task::spawn_blocking(move || {
         loop {
             let timeout = tick_rate;
             if event::poll(timeout).unwrap_or(false) {
