@@ -5,7 +5,7 @@ use tracing::{debug, info};
 use zbus::zvariant::OwnedValue;
 use zbus::Connection;
 
-use crate::dbus::types::parse_message_from_variant;
+use crate::dbus::types::parse_message_from_value;
 use crate::models::conversation::{sort_by_recent, Conversation};
 use crate::models::message::Message;
 
@@ -47,7 +47,7 @@ impl ConversationsClient {
 
     /// Get the list of active conversations (most recent message per thread).
     pub async fn active_conversations(&self) -> Result<Vec<Conversation>> {
-        let reply: Vec<OwnedValue> = self
+        let msg = self
             .connection
             .call_method(
                 Some(KDECONNECT_SERVICE),
@@ -56,13 +56,33 @@ impl ConversationsClient {
                 "activeConversations",
                 &(),
             )
-            .await?
-            .body()
-            .deserialize()?;
+            .await?;
 
-        let conversations = parse_active_conversations(&reply);
-        info!("Got {} active conversations", conversations.len());
-        Ok(conversations)
+        let body = msg.body();
+        debug!("activeConversations response signature: {:?}", body.signature());
+
+        // The response is av (array of variants), each variant wrapping a struct
+        if let Ok(reply) = body.deserialize::<Vec<OwnedValue>>() {
+            debug!("Deserialized {} conversation variants", reply.len());
+            let conversations = parse_active_conversations(&reply);
+            info!("Got {} active conversations", conversations.len());
+            return Ok(conversations);
+        }
+
+        // Fallback: try as a single value wrapping an array
+        if let Ok(reply) = body.deserialize::<OwnedValue>() {
+            if let Ok(vec) = <Vec<OwnedValue>>::try_from(reply.clone()) {
+                let conversations = parse_active_conversations(&vec);
+                info!("Got {} active conversations (unwrapped)", conversations.len());
+                return Ok(conversations);
+            }
+            let conversations = parse_active_conversations(&[reply]);
+            info!("Got {} active conversations (single)", conversations.len());
+            return Ok(conversations);
+        }
+
+        debug!("Could not deserialize activeConversations response");
+        Ok(Vec::new())
     }
 
     /// Request messages for a specific conversation thread.
@@ -96,22 +116,13 @@ impl ConversationsClient {
 
 /// Parse the response from activeConversations() into our Conversation model.
 ///
-/// Each element in the list is a variant containing a map of message fields
-/// representing the most recent message in each conversation thread.
+/// Each element is a variant wrapping a struct with positional fields:
+///   (event, body, addresses, date, type, read, threadID, uID, subID, attachments)
 fn parse_active_conversations(values: &[OwnedValue]) -> Vec<Conversation> {
     let mut conversations_map: HashMap<i64, Conversation> = HashMap::new();
 
     for val in values {
-        // Try to parse as a HashMap<String, OwnedValue>
-        let map: HashMap<String, OwnedValue> = match val.clone().try_into() {
-            Ok(m) => m,
-            Err(e) => {
-                debug!("Failed to parse conversation variant as map: {}", e);
-                continue;
-            }
-        };
-
-        if let Some(msg) = parse_message_from_variant(&map) {
+        if let Some(msg) = parse_message_from_value(val) {
             let thread_id = msg.thread_id;
             let is_group = msg.is_group();
 
@@ -121,13 +132,12 @@ fn parse_active_conversations(values: &[OwnedValue]) -> Vec<Conversation> {
 
             conv.is_group = is_group;
 
-            // Update latest message if this one is newer
-            let dominated = conv
+            let is_newer = conv
                 .latest_message
                 .as_ref()
                 .is_none_or(|existing| msg.date > existing.date);
 
-            if dominated {
+            if is_newer {
                 conv.latest_message = Some(msg);
             }
         }
@@ -140,42 +150,49 @@ fn parse_active_conversations(values: &[OwnedValue]) -> Vec<Conversation> {
 
 /// Parse a single message variant (from conversationUpdated/conversationCreated signals).
 pub fn parse_signal_message(val: &OwnedValue) -> Option<Message> {
-    let map: HashMap<String, OwnedValue> = val.clone().try_into().ok()?;
-    parse_message_from_variant(&map)
+    parse_message_from_value(val)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zbus::zvariant::Value;
+    use zbus::zvariant::{StructureBuilder, Value, Array, Signature};
 
-    fn make_owned(val: impl Into<Value<'static>>) -> OwnedValue {
-        val.into().try_into().unwrap()
-    }
-
+    /// Build a conversation variant matching what kdeconnect actually sends:
+    /// variant { struct(event, body, addresses, date, type, read, threadID, uID, subID, attachments) }
     fn make_conversation_variant(thread_id: i64, date: i64, body: &str, event: i32) -> OwnedValue {
-        let mut map: HashMap<String, Value<'_>> = HashMap::new();
-        map.insert("event".into(), Value::I32(event));
-        map.insert("body".into(), Value::Str(body.into()));
-        map.insert("date".into(), Value::I64(date));
-        map.insert("type".into(), Value::I32(1)); // Inbox
-        map.insert("read".into(), Value::I32(0));
-        map.insert("threadID".into(), Value::I64(thread_id));
-        map.insert("uID".into(), Value::I32(1));
-        map.insert("subID".into(), Value::I64(-1));
+        let addr = Value::Structure(
+            StructureBuilder::new()
+                .add_field(Value::Str("+15551234".into()))
+                .build().unwrap(),
+        );
+        let addresses = Value::Array(vec![addr].into());
+        let attachments: Value<'_> = Value::Array(
+            Array::new(&Signature::from_bytes(b"(xsss)").unwrap())
+        );
 
-        // Build addresses as array of dicts
-        let mut addr_map: HashMap<String, Value<'_>> = HashMap::new();
-        addr_map.insert("address".into(), Value::Str("+15551234".into()));
-        let addresses = Value::Array(vec![Value::Dict(addr_map.into())].into());
-        map.insert("addresses".into(), addresses);
+        let structure = Value::Structure(
+            StructureBuilder::new()
+                .add_field(Value::I32(event))
+                .add_field(Value::Str(body.into()))
+                .add_field(addresses)
+                .add_field(Value::I64(date))
+                .add_field(Value::I32(1))       // type: Inbox
+                .add_field(Value::I32(0))       // read
+                .add_field(Value::I64(thread_id))
+                .add_field(Value::I32(1))       // uID
+                .add_field(Value::I64(-1))      // subID
+                .add_field(attachments)
+                .build().unwrap(),
+        );
 
-        let dict_val: Value<'_> = Value::Dict(map.into());
-        dict_val.try_into().unwrap()
+        // Wrap in variant like kdeconnect does
+        let variant = Value::Value(Box::new(structure));
+        variant.try_into().unwrap()
     }
 
     #[test]
-    fn test_parse_active_conversations_basic() {
+    fn test_parse_active_conversations_struct_format() {
         let values = vec![
             make_conversation_variant(1, 3000, "newest in thread 1", 0x1),
             make_conversation_variant(2, 2000, "thread 2 message", 0x1),
@@ -183,14 +200,11 @@ mod tests {
         ];
 
         let convos = parse_active_conversations(&values);
-
-        // Should have 2 conversations (threads 1 and 2)
         assert_eq!(convos.len(), 2);
 
-        // Sorted by most recent: thread 1 (date 3000) first
+        // Sorted by most recent
         assert_eq!(convos[0].thread_id, 1);
         assert_eq!(convos[0].preview_text(), "newest in thread 1");
-
         assert_eq!(convos[1].thread_id, 2);
         assert_eq!(convos[1].preview_text(), "thread 2 message");
     }
@@ -198,7 +212,7 @@ mod tests {
     #[test]
     fn test_parse_active_conversations_group() {
         let values = vec![
-            make_conversation_variant(1, 1000, "group msg", 0x3), // 0x1 | 0x2 = group+text
+            make_conversation_variant(1, 1000, "group msg", 0x3),
         ];
 
         let convos = parse_active_conversations(&values);
