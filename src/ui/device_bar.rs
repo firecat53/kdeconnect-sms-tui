@@ -16,7 +16,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled("No devices found", theme::status_unavailable()),
             Span::styled(
-                " — is kdeconnectd running?",
+                " -- is kdeconnectd running?",
                 theme::help_style(),
             ),
         ])
@@ -49,10 +49,18 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             ));
         }
 
-        spans.push(Span::styled(
-            "  [Tab: switch device]",
-            theme::help_style(),
-        ));
+        // Show status message if present
+        if let Some(ref status) = app.status_message {
+            spans.push(Span::styled(
+                format!("  [{}]", status),
+                theme::help_style(),
+            ));
+        } else {
+            spans.push(Span::styled(
+                "  [Tab: switch | r: refresh | q: quit]",
+                theme::help_style(),
+            ));
+        }
 
         Line::from(spans)
     };
@@ -65,6 +73,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 mod tests {
     use super::*;
     use crate::app::App;
+    use crate::models::device::Device;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -82,5 +91,54 @@ mod tests {
 
         let content = crate::ui::test_helpers::buffer_to_string(terminal.backend().buffer());
         assert!(content.contains("No devices found"));
+    }
+
+    #[test]
+    fn test_device_bar_renders_with_device() {
+        let mut app = App::new_test();
+        app.devices = vec![Device {
+            id: "test".into(),
+            name: "Pixel 8".into(),
+            reachable: true,
+            paired: true,
+        }];
+        app.selected_device_idx = Some(0);
+
+        let backend = TestBackend::new(80, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                draw(f, &app, f.area());
+            })
+            .unwrap();
+
+        let content = crate::ui::test_helpers::buffer_to_string(terminal.backend().buffer());
+        assert!(content.contains("Pixel 8"));
+    }
+
+    #[test]
+    fn test_device_bar_shows_status() {
+        let mut app = App::new_test();
+        app.devices = vec![Device {
+            id: "test".into(),
+            name: "Phone".into(),
+            reachable: true,
+            paired: true,
+        }];
+        app.selected_device_idx = Some(0);
+        app.status_message = Some("5 conversations loaded".into());
+
+        let backend = TestBackend::new(80, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                draw(f, &app, f.area());
+            })
+            .unwrap();
+
+        let content = crate::ui::test_helpers::buffer_to_string(terminal.backend().buffer());
+        assert!(content.contains("5 conversations loaded"));
     }
 }

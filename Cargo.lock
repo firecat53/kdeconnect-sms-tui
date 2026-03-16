@@ -1168,6 +1168,7 @@ dependencies = [
  "color-eyre",
  "crossterm 0.28.1",
  "dirs",
+ "futures-lite",
  "image",
  "ratatui 0.29.0",
  "ratatui-image",

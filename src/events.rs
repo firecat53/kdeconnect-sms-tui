@@ -3,6 +3,8 @@ use std::time::Duration;
 use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
 use tokio::sync::mpsc;
 
+use crate::models::message::Message;
+
 /// Application events.
 #[derive(Debug)]
 pub enum AppEvent {
@@ -14,6 +16,14 @@ pub enum AppEvent {
     Tick,
     /// D-Bus: device list changed
     DevicesChanged,
+    /// D-Bus: new conversation appeared
+    ConversationCreated(Message),
+    /// D-Bus: existing conversation updated (new message)
+    ConversationUpdated(Message),
+    /// D-Bus: conversation removed
+    ConversationRemoved(i64),
+    /// Conversations finished loading from device
+    ConversationsLoaded,
 }
 
 /// Spawns an event loop that listens for terminal events and periodic ticks.
@@ -22,7 +32,6 @@ pub fn spawn_event_loop(tick_rate: Duration) -> mpsc::UnboundedReceiver<AppEvent
 
     tokio::spawn(async move {
         loop {
-            // Poll for crossterm events with timeout
             let timeout = tick_rate;
             if event::poll(timeout).unwrap_or(false) {
                 match event::read() {
@@ -38,14 +47,16 @@ pub fn spawn_event_loop(tick_rate: Duration) -> mpsc::UnboundedReceiver<AppEvent
                     }
                     _ => {}
                 }
-            } else {
-                // Tick on timeout
-                if tx.send(AppEvent::Tick).is_err() {
-                    break;
-                }
+            } else if tx.send(AppEvent::Tick).is_err() {
+                break;
             }
         }
     });
 
     rx
+}
+
+/// Returns the sender half for injecting D-Bus signal events into the event loop.
+pub fn create_event_channel() -> (mpsc::UnboundedSender<AppEvent>, mpsc::UnboundedReceiver<AppEvent>) {
+    mpsc::unbounded_channel()
 }
