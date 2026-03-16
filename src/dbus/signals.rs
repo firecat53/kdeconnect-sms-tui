@@ -30,7 +30,7 @@ async fn listen_signals(
 ) -> color_eyre::Result<()> {
     use futures_lite::StreamExt;
 
-    let device_path = format!("/modules/kdeconnect/devices/{}", device_id);
+    let device_path = format!("/modules/kdeconnect/devices/{}/sms", device_id);
 
     // Subscribe to all signals on the conversations interface for this device
     let rule = zbus::MatchRule::builder()

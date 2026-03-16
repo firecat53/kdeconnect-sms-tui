@@ -32,7 +32,7 @@ impl ConversationsClient {
     }
 
     fn device_path(&self) -> String {
-        format!("/modules/kdeconnect/devices/{}", self.device_id)
+        format!("/modules/kdeconnect/devices/{}/sms", self.device_id)
     }
 
     /// Request kdeconnect to fetch all conversation threads from the phone.
