@@ -1,6 +1,5 @@
-use std::time::Duration;
-
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
+use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent};
+use futures_lite::StreamExt;
 use tokio::sync::mpsc;
 
 use crate::models::message::Message;
@@ -26,32 +25,41 @@ pub enum AppEvent {
     ConversationsLoaded,
 }
 
-/// Spawns an event loop that listens for terminal events and periodic ticks.
+/// Spawns an async event loop using crossterm's EventStream.
 ///
-/// Uses `spawn_blocking` because crossterm's `poll`/`read` are blocking I/O
-/// that must not run on the async executor.
-pub fn spawn_event_loop(tick_rate: Duration) -> mpsc::UnboundedReceiver<AppEvent> {
+/// Uses crossterm's `event-stream` feature for proper async integration
+/// with tokio, which works correctly across terminal multiplexers like tmux.
+pub fn spawn_event_loop(tick_rate: std::time::Duration) -> mpsc::UnboundedReceiver<AppEvent> {
     let (tx, rx) = mpsc::unbounded_channel();
 
-    tokio::task::spawn_blocking(move || {
+    tokio::spawn(async move {
+        let mut reader = EventStream::new();
+        let mut tick_interval = tokio::time::interval(tick_rate);
+
         loop {
-            let timeout = tick_rate;
-            if event::poll(timeout).unwrap_or(false) {
-                match event::read() {
-                    Ok(CrosstermEvent::Key(key)) => {
-                        if tx.send(AppEvent::Key(key)).is_err() {
-                            break;
+            tokio::select! {
+                maybe_event = reader.next() => {
+                    match maybe_event {
+                        Some(Ok(CrosstermEvent::Key(key))) => {
+                            if tx.send(AppEvent::Key(key)).is_err() {
+                                break;
+                            }
                         }
-                    }
-                    Ok(CrosstermEvent::Resize(w, h)) => {
-                        if tx.send(AppEvent::Resize(w, h)).is_err() {
-                            break;
+                        Some(Ok(CrosstermEvent::Resize(w, h))) => {
+                            if tx.send(AppEvent::Resize(w, h)).is_err() {
+                                break;
+                            }
                         }
+                        Some(Ok(_)) => {} // ignore other events
+                        Some(Err(_)) => break,
+                        None => break, // stream ended
                     }
-                    _ => {}
                 }
-            } else if tx.send(AppEvent::Tick).is_err() {
-                break;
+                _ = tick_interval.tick() => {
+                    if tx.send(AppEvent::Tick).is_err() {
+                        break;
+                    }
+                }
             }
         }
     });

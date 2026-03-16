@@ -236,6 +236,20 @@ impl App {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
+        let result = self.run_inner(&mut terminal).await;
+
+        // Always restore terminal, even on error
+        disable_raw_mode()?;
+        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        terminal.show_cursor()?;
+
+        result
+    }
+
+    async fn run_inner(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) -> Result<()> {
         // Create event channels
         let mut term_events = events::spawn_event_loop(Duration::from_millis(250));
         let (signal_tx, mut signal_events) = events::create_event_channel();
@@ -260,11 +274,6 @@ impl App {
                 }
             }
         }
-
-        // Restore terminal
-        disable_raw_mode()?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-        terminal.show_cursor()?;
 
         Ok(())
     }
