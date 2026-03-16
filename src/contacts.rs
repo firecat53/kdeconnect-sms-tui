@@ -1,0 +1,234 @@
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use color_eyre::Result;
+use tracing::{debug, warn};
+
+/// Maps phone numbers to contact display names.
+#[derive(Debug, Clone)]
+pub struct ContactStore {
+    /// Normalized phone number → display name
+    contacts: HashMap<String, String>,
+}
+
+impl ContactStore {
+    /// Load contacts from the kdeconnect vCard sync directory.
+    pub fn load() -> Result<Self> {
+        let vcard_dir = Self::vcard_dir();
+        if !vcard_dir.exists() {
+            debug!("vCard directory does not exist: {:?}", vcard_dir);
+            return Ok(Self {
+                contacts: HashMap::new(),
+            });
+        }
+        Self::load_from_dir(&vcard_dir)
+    }
+
+    /// Load contacts from a specific directory (useful for testing).
+    pub fn load_from_dir(dir: &Path) -> Result<Self> {
+        let mut contacts = HashMap::new();
+
+        let entries = fs::read_dir(dir)?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext == "vcf" || ext == "vcard" {
+                match fs::read_to_string(&path) {
+                    Ok(content) => {
+                        parse_vcard_contacts(&content, &mut contacts);
+                    }
+                    Err(e) => {
+                        warn!("Failed to read vCard {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+
+        debug!("Loaded {} contacts from {:?}", contacts.len(), dir);
+        Ok(Self { contacts })
+    }
+
+    /// Look up a display name for a phone number.
+    pub fn lookup(&self, phone: &str) -> Option<&str> {
+        let normalized = normalize_phone(phone);
+        self.contacts.get(&normalized).map(|s| s.as_str())
+    }
+
+    /// Get display name or fall back to the phone number.
+    pub fn display_name(&self, phone: &str) -> String {
+        self.lookup(phone)
+            .unwrap_or(phone)
+            .to_string()
+    }
+
+    pub fn len(&self) -> usize {
+        self.contacts.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.contacts.is_empty()
+    }
+
+    fn vcard_dir() -> PathBuf {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+            .join("kpeoplevcard")
+    }
+}
+
+/// Parse vCard file content and insert name/phone mappings.
+fn parse_vcard_contacts(content: &str, contacts: &mut HashMap<String, String>) {
+    let mut current_name: Option<String> = None;
+    let mut current_phones: Vec<String> = Vec::new();
+    let mut in_vcard = false;
+
+    for line in content.lines() {
+        let line = line.trim();
+
+        if line.eq_ignore_ascii_case("BEGIN:VCARD") {
+            in_vcard = true;
+            current_name = None;
+            current_phones.clear();
+            continue;
+        }
+
+        if line.eq_ignore_ascii_case("END:VCARD") {
+            if let Some(ref name) = current_name {
+                for phone in &current_phones {
+                    let normalized = normalize_phone(phone);
+                    if !normalized.is_empty() {
+                        contacts.insert(normalized, name.clone());
+                    }
+                }
+            }
+            in_vcard = false;
+            continue;
+        }
+
+        if !in_vcard {
+            continue;
+        }
+
+        // FN (formatted name) — preferred over N
+        if let Some(value) = line.strip_prefix("FN:") {
+            let name = value.trim();
+            if !name.is_empty() {
+                current_name = Some(name.to_string());
+            }
+        } else if line.starts_with("FN;") {
+            // FN with parameters like FN;CHARSET=UTF-8:Name
+            if let Some(value) = line.split(':').nth(1) {
+                let name = value.trim();
+                if !name.is_empty() {
+                    current_name = Some(name.to_string());
+                }
+            }
+        }
+
+        // TEL lines: TEL:+1234, TEL;TYPE=CELL:+1234, etc.
+        if line.starts_with("TEL") {
+            if let Some(value) = line.split(':').last() {
+                let phone = value.trim();
+                if !phone.is_empty() {
+                    current_phones.push(phone.to_string());
+                }
+            }
+        }
+    }
+}
+
+/// Normalize a phone number for consistent lookup.
+/// Strips spaces, dashes, parens, and leading country code variations.
+pub fn normalize_phone(phone: &str) -> String {
+    let digits: String = phone.chars().filter(|c| c.is_ascii_digit() || *c == '+').collect();
+    // Keep the + prefix if present, strip everything else
+    digits
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    const SAMPLE_VCARD: &str = "\
+BEGIN:VCARD
+VERSION:3.0
+FN:Alice Smith
+TEL;TYPE=CELL:+15551234567
+TEL;TYPE=HOME:+15559876543
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Bob Jones
+TEL:+442071234567
+END:VCARD
+";
+
+    #[test]
+    fn test_parse_vcard_contacts() {
+        let mut contacts = HashMap::new();
+        parse_vcard_contacts(SAMPLE_VCARD, &mut contacts);
+        assert_eq!(contacts.len(), 3);
+        assert_eq!(contacts.get("+15551234567").unwrap(), "Alice Smith");
+        assert_eq!(contacts.get("+15559876543").unwrap(), "Alice Smith");
+        assert_eq!(contacts.get("+442071234567").unwrap(), "Bob Jones");
+    }
+
+    #[test]
+    fn test_normalize_phone() {
+        assert_eq!(normalize_phone("+1 (555) 123-4567"), "+15551234567");
+        assert_eq!(normalize_phone("555-123-4567"), "5551234567");
+        assert_eq!(normalize_phone("+44 20 7123 4567"), "+442071234567");
+    }
+
+    #[test]
+    fn test_load_from_dir() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("contact1.vcf");
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(SAMPLE_VCARD.as_bytes()).unwrap();
+
+        let store = ContactStore::load_from_dir(dir.path()).unwrap();
+        assert_eq!(store.len(), 3);
+        assert_eq!(store.lookup("+15551234567"), Some("Alice Smith"));
+        assert_eq!(store.display_name("+15551234567"), "Alice Smith");
+        assert_eq!(store.display_name("+19999999999"), "+19999999999");
+    }
+
+    #[test]
+    fn test_empty_dir() {
+        let dir = TempDir::new().unwrap();
+        let store = ContactStore::load_from_dir(dir.path()).unwrap();
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn test_vcard_with_params() {
+        let vcard = "\
+BEGIN:VCARD
+VERSION:3.0
+FN;CHARSET=UTF-8:Ñoño García
+TEL;TYPE=CELL:+34612345678
+END:VCARD
+";
+        let mut contacts = HashMap::new();
+        parse_vcard_contacts(vcard, &mut contacts);
+        assert_eq!(contacts.get("+34612345678").unwrap(), "Ñoño García");
+    }
+
+    #[test]
+    fn test_vcard_no_phone() {
+        let vcard = "\
+BEGIN:VCARD
+VERSION:3.0
+FN:No Phone Person
+EMAIL:nophone@example.com
+END:VCARD
+";
+        let mut contacts = HashMap::new();
+        parse_vcard_contacts(vcard, &mut contacts);
+        assert!(contacts.is_empty());
+    }
+}
