@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
 
@@ -204,10 +205,23 @@ impl App {
             return;
         }
 
-        // Then fetch what's cached
+        // Then fetch what's cached, preserving any loaded messages
         match client.active_conversations().await {
             Ok(convos) => {
-                self.conversations = convos;
+                // Merge new data, preserving messages from existing conversations
+                let mut old_map: HashMap<i64, _> = self
+                    .conversations
+                    .drain(..)
+                    .map(|c| (c.thread_id, c))
+                    .collect();
+                for mut new_conv in convos {
+                    if let Some(old) = old_map.remove(&new_conv.thread_id) {
+                        // Preserve loaded messages
+                        new_conv.messages = old.messages;
+                    }
+                    self.conversations.push(new_conv);
+                }
+                sort_by_recent(&mut self.conversations);
                 self.loading = LoadingState::Idle;
                 let count = self.conversations.len();
                 self.status_message = Some(format!("{} conversations loaded", count));
@@ -220,6 +234,48 @@ impl App {
             Err(e) => {
                 self.loading = LoadingState::Error(format!("Failed to load: {}", e));
                 self.status_message = Some(format!("Error: {}", e));
+            }
+        }
+    }
+
+    /// Fetch cached conversations from kdeconnect without requesting a new sync.
+    /// Preserves any messages already loaded in existing conversations.
+    async fn refresh_cached_conversations(&mut self) {
+        let Some(ref client) = self.conversations_client else {
+            return;
+        };
+
+        match client.active_conversations().await {
+            Ok(new_convos) => {
+                // Merge: preserve messages already loaded in existing conversations
+                for new_conv in new_convos {
+                    if let Some(existing) = self.conversations.iter_mut().find(|c| c.thread_id == new_conv.thread_id) {
+                        // Update metadata but keep loaded messages
+                        existing.is_group = new_conv.is_group;
+                        if let Some(ref new_latest) = new_conv.latest_message {
+                            let dominated = existing
+                                .latest_message
+                                .as_ref()
+                                .is_none_or(|e| new_latest.date > e.date);
+                            if dominated {
+                                existing.latest_message = new_conv.latest_message;
+                            }
+                        }
+                    } else {
+                        self.conversations.push(new_conv);
+                    }
+                }
+                sort_by_recent(&mut self.conversations);
+                self.loading = LoadingState::Idle;
+                let count = self.conversations.len();
+                self.status_message = Some(format!("{} conversations loaded", count));
+
+                if self.selected_conversation_idx.is_none() && !self.conversations.is_empty() {
+                    self.selected_conversation_idx = Some(0);
+                }
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Refresh error: {}", e));
             }
         }
     }
@@ -300,8 +356,10 @@ impl App {
                 self.handle_conversation_removed(thread_id);
             }
             AppEvent::ConversationsLoaded => {
-                // Re-fetch conversations after phone finishes sending data
-                self.load_conversations().await;
+                // Phone finished sending data — only fetch cached results.
+                // Do NOT call request_all_conversation_threads() here or it
+                // creates an infinite loop (request → signal → request → …).
+                self.refresh_cached_conversations().await;
             }
         }
     }

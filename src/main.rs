@@ -20,17 +20,31 @@ struct Args {
     /// Device name to connect to (alternative to --device)
     #[arg(short, long)]
     name: Option<String>,
+
+    /// Log file path (logs are suppressed if not set)
+    #[arg(long)]
+    log_file: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
-    fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_writer(std::io::stderr)
-        .init();
-
     let args = Args::parse();
+
+    // Only enable tracing if --log-file is specified; writing to stderr
+    // corrupts the TUI display (especially inside tmux).
+    if let Some(ref path) = args.log_file {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        fmt()
+            .with_env_filter(EnvFilter::from_default_env())
+            .with_writer(file)
+            .with_ansi(false)
+            .init();
+    }
+
     let config = config::Config::load()?;
 
     let mut app = app::App::new(config, args.device, args.name).await?;
