@@ -28,9 +28,46 @@ KDE Connect **does not support RCS** — this is [blocked by Android not exposin
 - **Service**: `org.kde.kdeconnect`
 - **Daemon path**: `/modules/kdeconnect`
 - **Device path**: `/modules/kdeconnect/devices/<deviceId>`
-- **Conversations interface**: `org.kde.kdeconnect.device.conversations`
 
-### Key Methods (org.kde.kdeconnect.device.conversations)
+| Interface | Object Path |
+|---|---|
+| `org.kde.kdeconnect.daemon` | `/modules/kdeconnect` |
+| `org.kde.kdeconnect.device` | `/modules/kdeconnect/devices/{deviceId}` |
+| `org.kde.kdeconnect.device.sms` | `/modules/kdeconnect/devices/{deviceId}/sms` |
+| `org.kde.kdeconnect.device.conversations` | `/modules/kdeconnect/devices/{deviceId}` (adaptor on device object) |
+| `org.kde.kdeconnect.device.telephony` | `/modules/kdeconnect/devices/{deviceId}/telephony` |
+
+### Daemon Interface (org.kde.kdeconnect.daemon)
+
+```
+devices(onlyReachable: bool, onlyPaired: bool) -> StringList
+deviceNames(onlyReachable: bool, onlyPaired: bool) -> Map<String,String>
+deviceIdByName(name: String) -> String
+selfId() -> String
+```
+
+**Signals:**
+```
+deviceAdded(id: String)
+deviceRemoved(id: String)
+deviceVisibilityChanged(id: String, isVisible: bool)
+deviceListChanged()
+```
+
+### SMS Plugin Interface (org.kde.kdeconnect.device.sms)
+
+```
+sendSms(addresses: List, textMessage: String, attachmentUrls: List, subID: i64 = -1)
+requestAllConversations()
+requestConversation(conversationID: i64, rangeStartTimestamp: i64 = -1, numberToRequest: i64 = -1)
+requestAttachment(partID: i64, uniqueIdentifier: String)
+getAttachment(partID: i64, uniqueIdentifier: String)  # checks cache first
+launchApp()  # opens messaging app on phone
+```
+
+Note: `subID` parameter enables **dual-SIM selection**.
+
+### Conversations Interface (org.kde.kdeconnect.device.conversations)
 
 ```
 activeConversations() -> QVariantList
@@ -41,8 +78,7 @@ requestAllConversationThreads()
 requestAttachmentFile(partID: i64, uniqueIdentifier: String)
 ```
 
-### Signals
-
+**Signals:**
 ```
 conversationCreated(msg: Variant)
 conversationRemoved(conversationID: i64)
@@ -51,12 +87,29 @@ conversationLoaded(conversationID: i64, messageCount: u64)
 attachmentReceived(filePath: String, fileName: String)
 ```
 
-### Device Management (org.kde.kdeconnect.daemon)
+### ConversationMessage Data Structure
 
-```
-devices(onlyReachable: bool, onlyPaired: bool) -> StringList
-deviceNames(onlyReachable: bool, onlyPaired: bool) -> Map<String,String>
-```
+Messages are serialized over D-Bus as structs with these fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `eventField` | `i32` | Bitwise: `0x1` = text message, `0x2` = multi-target (group) |
+| `body` | `String` | Message text body |
+| `addresses` | `List<{address: String}>` | Sender/recipient addresses |
+| `date` | `i64` | Unix epoch milliseconds |
+| `type` | `i32` | 1=Inbox, 2=Sent, 3=Draft, 4=Outbox, 5=Failed, 6=Queued |
+| `read` | `i32` | Read status |
+| `threadID` | `i64` | Conversation thread ID |
+| `uID` | `i32` | Unique message identifier |
+| `subID` | `i64` | SIM card subscriber ID |
+| `attachments` | `List<{partID: i64, mimeType: String, base64EncodedFile: String, uniqueIdentifier: String}>` | Attachment metadata |
+
+**Helpers:** `isIncoming()` = type==1, `isMultitarget()` = eventField & 0x2, `containsAttachment()` = attachments non-empty
+
+### Incoming Message Notification Paths
+
+1. **SMS Plugin (primary):** Phone sends `kdeconnect.sms.messages` packets → `conversationCreated`/`conversationUpdated` D-Bus signals
+2. **Notifications Plugin (supplementary):** Android SMS notifications arrive as `kdeconnect.notification` packets with `replyId`, `isConversation`, `isGroupConversation`, `groupName` fields. Supports inline reply via `sendReply(replyId, message)`
 
 ### CLI Reference
 
@@ -263,6 +316,10 @@ Each phase includes its own test requirements marked above. Tests should be writ
 6. **Rate limiting** — kdeconnect can be slow to respond when fetching all conversations from the phone. Need loading indicators and graceful timeout handling.
 
 7. **Error handling for disconnected devices** — Device goes out of range mid-conversation.
+
+8. **Dual-SIM selection** — `sendSms()` accepts a `subID` for SIM card selection. Should expose this in the UI for dual-SIM phones.
+
+9. **Prior art** — [GideonWolfe/kdeconnect-sms-tui](https://github.com/GideonWolfe/kdeconnect-sms-tui) is an existing (unmaintained) Go TUI for kdeconnect SMS. Worth studying for UX ideas.
 
 ---
 
