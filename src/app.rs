@@ -412,8 +412,9 @@ impl App {
         sort_by_recent(&mut self.conversations);
     }
 
-    /// Load message history for the currently selected conversation.
-    async fn load_selected_conversation_messages(&mut self) {
+    /// Request message history for the currently selected conversation.
+    /// Spawns the D-Bus call as a background task so it doesn't block the UI.
+    fn request_selected_conversation_messages(&self) {
         let Some(idx) = self.selected_conversation_idx else {
             return;
         };
@@ -425,11 +426,16 @@ impl App {
         };
 
         let thread_id = conv.thread_id;
+        let connection = client.connection().clone();
+        let device_id = client.device_id().to_owned();
 
-        // Request messages: start=0, end=50 for initial batch
-        if let Err(e) = client.request_conversation(thread_id, 0, 50).await {
-            tracing::warn!("Failed to request conversation {}: {}", thread_id, e);
-        }
+        // Fire-and-forget: the phone will send messages back via D-Bus signals
+        tokio::spawn(async move {
+            let client = ConversationsClient::new(connection, device_id);
+            if let Err(e) = client.request_conversation(thread_id, 0, 50).await {
+                tracing::warn!("Failed to request conversation {}: {}", thread_id, e);
+            }
+        });
     }
 
     /// Handle a conversation being removed.
@@ -485,18 +491,18 @@ impl App {
             // Conversation navigation
             KeyCode::Up | KeyCode::Char('k') => {
                 self.select_prev_conversation();
-                self.load_selected_conversation_messages().await;
+                self.request_selected_conversation_messages();
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.select_next_conversation();
-                self.load_selected_conversation_messages().await;
+                self.request_selected_conversation_messages();
             }
 
             // Enter conversation / focus compose
             KeyCode::Enter | KeyCode::Char('i') => {
                 if self.selected_conversation_idx.is_some() {
                     self.focus = Focus::Compose;
-                    self.load_selected_conversation_messages().await;
+                    self.request_selected_conversation_messages();
                 }
             }
 

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use color_eyre::Result;
+use tokio::time::timeout;
 use tracing::{debug, info};
 use zbus::zvariant::OwnedValue;
 use zbus::Connection;
@@ -11,6 +13,9 @@ use crate::models::message::Message;
 
 const KDECONNECT_SERVICE: &str = "org.kde.kdeconnect";
 const CONVERSATIONS_INTERFACE: &str = "org.kde.kdeconnect.device.conversations";
+
+/// Timeout for D-Bus method calls.
+const DBUS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Client for the kdeconnect conversations D-Bus interface.
 pub struct ConversationsClient {
@@ -32,22 +37,23 @@ impl ConversationsClient {
 
     /// Request kdeconnect to fetch all conversation threads from the phone.
     pub async fn request_all_conversation_threads(&self) -> Result<()> {
-        self.connection
+        timeout(DBUS_TIMEOUT, self.connection
             .call_method(
                 Some(KDECONNECT_SERVICE),
                 self.device_path().as_str(),
                 Some(CONVERSATIONS_INTERFACE),
                 "requestAllConversationThreads",
                 &(),
-            )
-            .await?;
+            ))
+            .await
+            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: requestAllConversationThreads"))??;
         info!("Requested all conversation threads");
         Ok(())
     }
 
     /// Get the list of active conversations (most recent message per thread).
     pub async fn active_conversations(&self) -> Result<Vec<Conversation>> {
-        let msg = self
+        let msg = timeout(DBUS_TIMEOUT, self
             .connection
             .call_method(
                 Some(KDECONNECT_SERVICE),
@@ -55,8 +61,9 @@ impl ConversationsClient {
                 Some(CONVERSATIONS_INTERFACE),
                 "activeConversations",
                 &(),
-            )
-            .await?;
+            ))
+            .await
+            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: activeConversations"))??;
 
         let body = msg.body();
         debug!("activeConversations response signature: {:?}", body.signature());
@@ -92,15 +99,16 @@ impl ConversationsClient {
         start: i32,
         end: i32,
     ) -> Result<()> {
-        self.connection
+        timeout(DBUS_TIMEOUT, self.connection
             .call_method(
                 Some(KDECONNECT_SERVICE),
                 self.device_path().as_str(),
                 Some(CONVERSATIONS_INTERFACE),
                 "requestConversation",
                 &(thread_id, start, end),
-            )
-            .await?;
+            ))
+            .await
+            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: requestConversation"))??;
         debug!("Requested conversation {} (range {}-{})", thread_id, start, end);
         Ok(())
     }
@@ -112,15 +120,16 @@ impl ConversationsClient {
         message: &str,
     ) -> Result<()> {
         let attachments: Vec<String> = Vec::new();
-        self.connection
+        timeout(DBUS_TIMEOUT, self.connection
             .call_method(
                 Some(KDECONNECT_SERVICE),
                 self.device_path().as_str(),
                 Some(CONVERSATIONS_INTERFACE),
                 "replyToConversation",
                 &(thread_id, message, &attachments),
-            )
-            .await?;
+            ))
+            .await
+            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: replyToConversation"))??;
         info!("Sent reply to thread {}", thread_id);
         Ok(())
     }
@@ -132,15 +141,16 @@ impl ConversationsClient {
         message: &str,
     ) -> Result<()> {
         let attachments: Vec<String> = Vec::new();
-        self.connection
+        timeout(DBUS_TIMEOUT, self.connection
             .call_method(
                 Some(KDECONNECT_SERVICE),
                 self.device_path().as_str(),
                 Some(CONVERSATIONS_INTERFACE),
                 "sendWithoutConversation",
                 &(addresses, message, &attachments),
-            )
-            .await?;
+            ))
+            .await
+            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: sendWithoutConversation"))??;
         info!("Sent message to {:?}", addresses);
         Ok(())
     }
