@@ -98,13 +98,24 @@ impl App {
 
         app.refresh_devices().await;
 
-        // Resolve initial device
+        // Resolve initial device (non-fatal if kdeconnect is unresponsive)
         if let Some(ref daemon) = app.daemon {
-            let resolved = daemon
+            match daemon
                 .resolve_device(device_id.as_deref(), device_name.as_deref())
-                .await?;
-            if let Some(dev) = resolved {
-                app.selected_device_idx = app.devices.iter().position(|d| d.id == dev.id);
+                .await
+            {
+                Ok(Some(dev)) => {
+                    app.selected_device_idx =
+                        app.devices.iter().position(|d| d.id == dev.id);
+                }
+                Ok(None) => {
+                    app.status_message = Some("No reachable device found".into());
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to resolve device: {}", e);
+                    app.status_message =
+                        Some("Could not reach kdeconnect daemon (press 'r' to retry)".into());
+                }
             }
         }
 
@@ -506,9 +517,16 @@ impl App {
                 }
             }
 
-            // Refresh conversations
+            // Refresh: re-discover devices if none connected, else reload conversations
             KeyCode::Char('r') => {
-                self.load_conversations().await;
+                if self.conversations_client.is_none() {
+                    self.refresh_devices().await;
+                    if self.selected_device_idx.is_some() {
+                        self.connect_to_device(signal_tx).await;
+                    }
+                } else {
+                    self.load_conversations().await;
+                }
             }
 
             // Message scrolling
