@@ -171,6 +171,7 @@ clap = { version = "4", features = ["derive"] }  # CLI args
 color-eyre = "0.6"            # Error handling
 tracing = "0.1"               # Logging
 tracing-subscriber = "0.3"
+vcard_parser = "0.2"           # Parse vCard contacts from kdeconnect
 ```
 
 ---
@@ -188,6 +189,7 @@ src/
 │   ├── conversations.rs      # Conversation list, message fetching
 │   ├── messages.rs           # Send/reply, attachments
 │   └── types.rs              # D-Bus type mappings (Message, Conversation, Address)
+├── contacts.rs                   # Parse vCards from ~/.local/share/kpeoplevcard/, phone→name map
 ├── ui/
 │   ├── mod.rs
 │   ├── device_bar.rs         # Device selector (top bar)
@@ -303,7 +305,7 @@ Each phase includes its own test requirements marked above. Tests should be writ
 
 ## Necessities You Might Be Missing
 
-1. **Contact name resolution** — kdeconnect provides phone numbers but not contact names from the phone's address book. May need to integrate with local contacts (e.g. `khard`, `abook`, or a simple local mapping file).
+1. **Contact name resolution** — kdeconnect's contacts plugin syncs phone contacts as vCard files to `~/.local/share/kpeoplevcard/` (one-way, Android → Desktop, auto-synced). We parse these `.vcf`/`.vcard` files to build a phone number → display name mapping. No external contacts app needed.
 
 2. **Message persistence/caching** — kdeconnect doesn't store messages on the desktop side permanently. Consider a local SQLite cache so the app doesn't need to re-fetch everything on startup.
 
