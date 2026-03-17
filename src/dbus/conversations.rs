@@ -183,8 +183,10 @@ fn parse_active_conversations(values: &[OwnedValue]) -> Vec<Conversation> {
 
             // Determine group status by address count rather than the event
             // bitmask, since Android sets EventMultiTarget on MMS messages
-            // even in 1:1 conversations.
-            conv.is_group = conv.is_group || msg.addresses.len() > 1;
+            // even in 1:1 conversations.  MMS address lists include the
+            // user's own number, so a 1:1 MMS has 2 addresses (self +
+            // other) while a true group has 3+.
+            conv.is_group = conv.is_group || msg.addresses.len() > 2;
 
             let is_newer = conv
                 .latest_message
@@ -271,13 +273,26 @@ mod tests {
 
     #[test]
     fn test_parse_active_conversations_group() {
+        // A true group MMS has 3+ addresses (self + 2 others)
         let values = vec![
-            make_conversation_variant_addrs(1, 1000, "group msg", 0x3, &["+15551111", "+15552222"]),
+            make_conversation_variant_addrs(1, 1000, "group msg", 0x3, &["+15551111", "+15552222", "+15553333"]),
         ];
 
         let convos = parse_active_conversations(&values);
         assert_eq!(convos.len(), 1);
         assert!(convos[0].is_group);
+    }
+
+    #[test]
+    fn test_two_addresses_not_group() {
+        // A 1:1 MMS has 2 addresses (self + other) — not a group
+        let values = vec![
+            make_conversation_variant_addrs(1, 1000, "mms msg", 0x3, &["+15551111", "+15552222"]),
+        ];
+
+        let convos = parse_active_conversations(&values);
+        assert_eq!(convos.len(), 1);
+        assert!(!convos[0].is_group);
     }
 
     #[test]
