@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use color_eyre::Result;
@@ -8,6 +9,8 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScree
 use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
 use tracing::info;
 
 use crate::config::Config;
@@ -35,6 +38,16 @@ pub enum Focus {
     Compose,
 }
 
+/// State of an image attachment being fetched/decoded.
+pub enum ImageState {
+    /// Request sent, waiting for file
+    Downloading,
+    /// Image decoded and ready for rendering
+    Loaded(Box<StatefulProtocol>),
+    /// Failed to load
+    Failed(String),
+}
+
 pub struct App {
     pub config: Config,
     pub devices: Vec<Device>,
@@ -54,6 +67,12 @@ pub struct App {
     conversations_client: Option<ConversationsClient>,
     /// Sender for injecting D-Bus signal events
     signal_tx: Option<tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+    /// Terminal image protocol picker (None if detection failed)
+    pub picker: Option<Picker>,
+    /// Image states keyed by attachment unique_identifier
+    pub image_states: HashMap<String, ImageState>,
+    /// Attachment unique_identifiers that have been requested (to avoid duplicates)
+    pending_attachments: HashSet<String>,
 }
 
 impl App {
@@ -94,6 +113,9 @@ impl App {
             daemon,
             conversations_client: None,
             signal_tx: None,
+            picker: None,
+            image_states: HashMap::new(),
+            pending_attachments: HashSet::new(),
         };
 
         app.refresh_devices().await;
@@ -145,6 +167,9 @@ impl App {
             daemon: None,
             conversations_client: None,
             signal_tx: None,
+            picker: None,
+            image_states: HashMap::new(),
+            pending_attachments: HashSet::new(),
         }
     }
 
@@ -305,6 +330,18 @@ impl App {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
+        // Detect terminal image protocol (must be after entering alternate screen)
+        self.picker = match Picker::from_query_stdio() {
+            Ok(p) => {
+                info!("Detected image protocol: {:?}", p.protocol_type());
+                Some(p)
+            }
+            Err(e) => {
+                info!("Image protocol detection failed, using halfblocks: {}", e);
+                Some(Picker::halfblocks())
+            }
+        };
+
         let result = self.run_inner(&mut terminal).await;
 
         // Always restore terminal, even on error
@@ -360,10 +397,14 @@ impl App {
                 self.refresh_devices().await;
             }
             AppEvent::ConversationCreated(msg) => {
+                let thread_id = msg.thread_id;
                 self.handle_conversation_created(msg);
+                self.auto_request_attachments_for(thread_id);
             }
             AppEvent::ConversationUpdated(msg) => {
+                let thread_id = msg.thread_id;
                 self.handle_conversation_updated(msg);
+                self.auto_request_attachments_for(thread_id);
             }
             AppEvent::ConversationRemoved(thread_id) => {
                 self.handle_conversation_removed(thread_id);
@@ -373,6 +414,9 @@ impl App {
                 // Do NOT call request_all_conversation_threads() here or it
                 // creates an infinite loop (request → signal → request → …).
                 self.refresh_cached_conversations().await;
+            }
+            AppEvent::AttachmentReceived(file_path, file_name) => {
+                self.handle_attachment_received(&file_path, &file_name);
             }
         }
     }
@@ -427,7 +471,7 @@ impl App {
 
     /// Request message history for the currently selected conversation.
     /// Spawns the D-Bus call as a background task so it doesn't block the UI.
-    fn request_selected_conversation_messages(&self) {
+    fn request_selected_conversation_messages(&mut self) {
         let Some(idx) = self.selected_conversation_idx else {
             return;
         };
@@ -449,6 +493,9 @@ impl App {
                 tracing::warn!("Failed to request conversation {}: {}", thread_id, e);
             }
         });
+
+        // Also request any image attachments
+        self.request_conversation_attachments();
     }
 
     /// Handle a conversation being removed.
@@ -467,6 +514,192 @@ impl App {
                     };
                 }
             }
+        }
+    }
+
+    /// Request attachments if the given thread is the currently selected conversation.
+    fn auto_request_attachments_for(&mut self, thread_id: i64) {
+        if let Some(idx) = self.selected_conversation_idx {
+            if let Some(conv) = self.conversations.get(idx) {
+                if conv.thread_id == thread_id {
+                    self.request_conversation_attachments();
+                }
+            }
+        }
+    }
+
+    /// Handle an attachment file arriving from kdeconnect.
+    fn handle_attachment_received(&mut self, file_path: &str, _file_name: &str) {
+        let path = PathBuf::from(file_path);
+        if !path.exists() {
+            tracing::warn!("Attachment file not found: {}", file_path);
+            return;
+        }
+
+        // Find which attachment(s) match this file path.
+        // kdeconnect uses uniqueIdentifier as filename in its cache,
+        // so we match by checking if the path ends with the unique_identifier.
+        let file_stem = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+
+        // Update cached_path on matching attachments in all conversations
+        for conv in &mut self.conversations {
+            for msg in &mut conv.messages {
+                for att in &mut msg.attachments {
+                    if att.unique_identifier == file_stem
+                        || file_path.contains(&att.unique_identifier)
+                    {
+                        att.cached_path = Some(path.clone());
+                    }
+                }
+            }
+            if let Some(ref mut msg) = conv.latest_message {
+                for att in &mut msg.attachments {
+                    if att.unique_identifier == file_stem
+                        || file_path.contains(&att.unique_identifier)
+                    {
+                        att.cached_path = Some(path.clone());
+                    }
+                }
+            }
+        }
+
+        // Decode image if applicable
+        if let Some(ref picker) = self.picker {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let is_image = matches!(
+                ext.to_lowercase().as_str(),
+                "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp"
+            ) || file_stem
+                .split('.')
+                .next()
+                .is_some_and(|_| {
+                    // Try to detect from the attachment metadata
+                    self.conversations.iter().any(|c| {
+                        c.messages.iter().any(|m| {
+                            m.attachments.iter().any(|a| {
+                                (a.unique_identifier == file_stem
+                                    || file_path.contains(&a.unique_identifier))
+                                    && a.is_image()
+                            })
+                        })
+                    })
+                });
+
+            if is_image {
+                match image::open(&path) {
+                    Ok(dyn_img) => {
+                        let protocol = picker.new_resize_protocol(dyn_img);
+                        self.image_states.insert(
+                            file_stem.to_string(),
+                            ImageState::Loaded(Box::new(protocol)),
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to decode image {}: {}", file_path, e);
+                        self.image_states.insert(
+                            file_stem.to_string(),
+                            ImageState::Failed(e.to_string()),
+                        );
+                    }
+                }
+            }
+        }
+
+        self.pending_attachments.remove(file_stem);
+    }
+
+    /// Request downloads for all image attachments in the currently selected conversation.
+    fn request_conversation_attachments(&mut self) {
+        let Some(idx) = self.selected_conversation_idx else {
+            return;
+        };
+        let Some(conv) = self.conversations.get(idx) else {
+            return;
+        };
+        let Some(ref client) = self.conversations_client else {
+            return;
+        };
+
+        let connection = client.connection().clone();
+        let device_id = client.device_id().to_owned();
+
+        // Collect attachments that need downloading
+        let mut to_request: Vec<(i64, String)> = Vec::new();
+        for msg in &conv.messages {
+            for att in &msg.attachments {
+                if att.is_image()
+                    && !att.is_cached()
+                    && !self.pending_attachments.contains(&att.unique_identifier)
+                    && !self.image_states.contains_key(&att.unique_identifier)
+                {
+                    to_request.push((att.part_id, att.unique_identifier.clone()));
+                    self.pending_attachments.insert(att.unique_identifier.clone());
+                    self.image_states.insert(
+                        att.unique_identifier.clone(),
+                        ImageState::Downloading,
+                    );
+                }
+            }
+        }
+
+        // Also check latest_message (may not be in messages vec yet)
+        if let Some(ref msg) = conv.latest_message {
+            for att in &msg.attachments {
+                if att.is_image()
+                    && !att.is_cached()
+                    && !self.pending_attachments.contains(&att.unique_identifier)
+                    && !self.image_states.contains_key(&att.unique_identifier)
+                {
+                    to_request.push((att.part_id, att.unique_identifier.clone()));
+                    self.pending_attachments.insert(att.unique_identifier.clone());
+                    self.image_states.insert(
+                        att.unique_identifier.clone(),
+                        ImageState::Downloading,
+                    );
+                }
+            }
+        }
+
+        // Also load any already-cached images that haven't been decoded yet
+        if let Some(ref picker) = self.picker {
+            for msg in &conv.messages {
+                for att in &msg.attachments {
+                    if att.is_image()
+                        && att.is_cached()
+                        && !self.image_states.contains_key(&att.unique_identifier)
+                    {
+                        if let Some(ref path) = att.cached_path {
+                            match image::open(path) {
+                                Ok(dyn_img) => {
+                                    let protocol = picker.new_resize_protocol(dyn_img);
+                                    self.image_states.insert(
+                                        att.unique_identifier.clone(),
+                                        ImageState::Loaded(Box::new(protocol)),
+                                    );
+                                }
+                                Err(e) => {
+                                    self.image_states.insert(
+                                        att.unique_identifier.clone(),
+                                        ImageState::Failed(e.to_string()),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !to_request.is_empty() {
+            tracing::info!("Requesting {} attachments", to_request.len());
+            tokio::spawn(async move {
+                let client = ConversationsClient::new(connection, device_id);
+                for (part_id, uid) in to_request {
+                    if let Err(e) = client.request_attachment_file(part_id, &uid).await {
+                        tracing::warn!("Failed to request attachment {}: {}", uid, e);
+                    }
+                }
+            });
         }
     }
 

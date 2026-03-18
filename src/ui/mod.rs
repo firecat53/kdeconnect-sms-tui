@@ -12,7 +12,7 @@ use ratatui::Frame;
 use crate::app::App;
 
 /// Render the full application UI.
-pub fn draw(f: &mut Frame, app: &App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
     use ratatui::layout::{Constraint, Direction, Layout};
 
     let chunks = Layout::default()

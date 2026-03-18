@@ -157,6 +157,27 @@ impl ConversationsClient {
         Ok(())
     }
 
+    /// Request an attachment file from the phone (cache-first via kdeconnect).
+    /// The file arrives asynchronously via the `attachmentReceived` signal.
+    pub async fn request_attachment_file(
+        &self,
+        part_id: i64,
+        unique_identifier: &str,
+    ) -> Result<()> {
+        timeout(DBUS_TIMEOUT, self.connection
+            .call_method(
+                Some(KDECONNECT_SERVICE),
+                self.device_path().as_str(),
+                Some(CONVERSATIONS_INTERFACE),
+                "requestAttachmentFile",
+                &(part_id, unique_identifier),
+            ))
+            .await
+            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: requestAttachmentFile"))??;
+        debug!("Requested attachment partID={} uid={}", part_id, unique_identifier);
+        Ok(())
+    }
+
     pub fn device_id(&self) -> &str {
         &self.device_id
     }

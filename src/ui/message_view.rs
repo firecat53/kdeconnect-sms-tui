@@ -2,11 +2,44 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
+use ratatui_image::StatefulImage;
 
-use crate::app::App;
+use crate::app::{App, ImageState};
 use super::theme;
 
-pub fn draw(f: &mut Frame, app: &App, area: Rect) {
+/// Maximum height (in terminal rows) for an inline image.
+const IMAGE_MAX_ROWS: u16 = 12;
+
+/// A render element in the message view: either text lines or an image.
+enum RenderItem {
+    Text(Vec<Line<'static>>),
+    Image {
+        uid: String,
+        height: u16,
+    },
+    ImagePlaceholder(Line<'static>),
+}
+
+impl RenderItem {
+    fn height(&self, width: u16) -> u16 {
+        match self {
+            RenderItem::Text(lines) => {
+                if width == 0 {
+                    return lines.len() as u16;
+                }
+                // Estimate wrapped height
+                lines.iter().map(|line| {
+                    let w: usize = line.spans.iter().map(|s| s.content.len()).sum();
+                    1.max(w.div_ceil(width as usize)) as u16
+                }).sum()
+            }
+            RenderItem::Image { height, .. } => *height,
+            RenderItem::ImagePlaceholder(_) => 1,
+        }
+    }
+}
+
+pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Messages ")
@@ -38,7 +71,8 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let mut lines = Vec::new();
+    // Build render items from messages
+    let mut items: Vec<RenderItem> = Vec::new();
 
     for msg in &conv.messages {
         let sender = if msg.is_incoming() {
@@ -55,48 +89,149 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         };
 
         let time = msg.timestamp_display();
-        lines.push(Line::from(vec![
+        let mut text_lines = vec![Line::from(vec![
             Span::styled(format!("[{}] ", time), theme::timestamp_style()),
             Span::styled(format!("{}: ", sender), style),
-            Span::raw(&msg.body),
-        ]));
+            Span::raw(msg.body.clone()),
+        ])];
 
-        if msg.has_attachments() {
-            for att in &msg.attachments {
-                let label = if att.is_image() {
-                    format!("  [Image: {}]", att.mime_type)
-                } else {
-                    format!("  [Attachment: {}]", att.mime_type)
-                };
-                lines.push(Line::from(Span::styled(label, theme::help_style())));
+        // Add non-image attachment labels to text
+        for att in &msg.attachments {
+            if !att.is_image() {
+                let label = format!("  [Attachment: {}]", att.mime_type);
+                text_lines.push(Line::from(Span::styled(label, theme::help_style())));
+            }
+        }
+
+        if !text_lines.is_empty() {
+            items.push(RenderItem::Text(text_lines));
+        }
+
+        // Add image attachments
+        for att in &msg.attachments {
+            if att.is_image() {
+                match app.image_states.get(&att.unique_identifier) {
+                    Some(ImageState::Loaded(_)) => {
+                        items.push(RenderItem::Image {
+                            uid: att.unique_identifier.clone(),
+                            height: IMAGE_MAX_ROWS,
+                        });
+                    }
+                    Some(ImageState::Downloading) => {
+                        items.push(RenderItem::ImagePlaceholder(
+                            Line::from(Span::styled(
+                                format!("  [Downloading {}...]", att.mime_type),
+                                theme::help_style(),
+                            ))
+                        ));
+                    }
+                    Some(ImageState::Failed(reason)) => {
+                        items.push(RenderItem::ImagePlaceholder(
+                            Line::from(Span::styled(
+                                format!("  [Image failed: {}]", reason),
+                                theme::help_style(),
+                            ))
+                        ));
+                    }
+                    None => {
+                        items.push(RenderItem::ImagePlaceholder(
+                            Line::from(Span::styled(
+                                format!("  [Image: {}]", att.mime_type),
+                                theme::help_style(),
+                            ))
+                        ));
+                    }
+                }
             }
         }
     }
 
-    // Inner dimensions exclude block borders (2 rows, 2 cols)
-    let inner_height = area.height.saturating_sub(2) as usize;
-    let inner_width = area.width.saturating_sub(2) as usize;
+    // Render the block border first, then render content inside
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    // Estimate total wrapped lines for auto-scroll to bottom.
-    let total_lines: usize = if inner_width > 0 {
-        lines.iter().map(|line| {
-            let width: usize = line.spans.iter().map(|s| s.content.len()).sum();
-            1.max(width.div_ceil(inner_width))
-        }).sum()
-    } else {
-        lines.len()
-    };
+    let inner_width = inner.width;
+    let inner_height = inner.height;
 
-    // message_scroll is an offset FROM the bottom (0 = newest visible).
-    let max_scroll = total_lines.saturating_sub(inner_height);
-    let scroll_offset = max_scroll.saturating_sub(app.message_scroll as usize) as u16;
+    // Calculate total content height
+    let total_height: u16 = items.iter().map(|item| item.height(inner_width)).sum();
 
-    let paragraph = Paragraph::new(lines)
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll_offset, 0));
+    // message_scroll is an offset FROM the bottom (0 = newest visible)
+    let max_scroll = total_height.saturating_sub(inner_height);
+    let scroll_offset = max_scroll.saturating_sub(app.message_scroll) as i32;
 
-    f.render_widget(paragraph, area);
+    // Render visible items
+    let mut y: i32 = -(scroll_offset as i32);
+
+    for item in &items {
+        let item_height = item.height(inner_width);
+
+        // Check if item is visible (even partially)
+        let item_top = y;
+        let item_bottom = y + item_height as i32;
+
+        if item_bottom <= 0 {
+            // Entirely above the visible area
+            y += item_height as i32;
+            continue;
+        }
+        if item_top >= inner_height as i32 {
+            // Entirely below the visible area
+            break;
+        }
+
+        // Clamp to visible area
+        let render_y = item_top.max(0) as u16;
+        let available = inner_height.saturating_sub(render_y);
+
+        match item {
+            RenderItem::Text(lines) => {
+                let skip = if item_top < 0 { (-item_top) as u16 } else { 0 };
+                let visible_height = item_height.saturating_sub(skip).min(available);
+                if visible_height > 0 {
+                    let text_area = Rect {
+                        x: inner.x,
+                        y: inner.y + render_y,
+                        width: inner_width,
+                        height: visible_height,
+                    };
+                    let paragraph = Paragraph::new(lines.clone())
+                        .wrap(Wrap { trim: false })
+                        .scroll((skip, 0));
+                    f.render_widget(paragraph, text_area);
+                }
+            }
+            RenderItem::Image { uid, height } => {
+                let visible_height = (*height).min(available);
+                if visible_height > 0 && item_top >= 0 {
+                    let img_area = Rect {
+                        x: inner.x,
+                        y: inner.y + render_y,
+                        width: inner_width.min(40),
+                        height: visible_height,
+                    };
+                    if let Some(ImageState::Loaded(protocol)) = app.image_states.get_mut(uid) {
+                        let image_widget = StatefulImage::<ratatui_image::protocol::StatefulProtocol>::default();
+                        f.render_stateful_widget(image_widget, img_area, protocol.as_mut());
+                    }
+                }
+            }
+            RenderItem::ImagePlaceholder(line) => {
+                if item_top >= 0 {
+                    let text_area = Rect {
+                        x: inner.x,
+                        y: inner.y + render_y,
+                        width: inner_width,
+                        height: 1.min(available),
+                    };
+                    let paragraph = Paragraph::new(line.clone());
+                    f.render_widget(paragraph, text_area);
+                }
+            }
+        }
+
+        y += item_height as i32;
+    }
 }
 
 #[cfg(test)]
@@ -131,13 +266,13 @@ mod tests {
 
     #[test]
     fn test_message_view_no_selection() {
-        let app = App::new_test();
+        let mut app = App::new_test();
         let backend = TestBackend::new(50, 10);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                draw(f, &app, f.area());
+                draw(f, &mut app, f.area());
             })
             .unwrap();
 
@@ -165,7 +300,7 @@ mod tests {
 
         terminal
             .draw(|f| {
-                draw(f, &app, f.area());
+                draw(f, &mut app, f.area());
             })
             .unwrap();
 
@@ -192,7 +327,7 @@ mod tests {
 
         terminal
             .draw(|f| {
-                draw(f, &app, f.area());
+                draw(f, &mut app, f.area());
             })
             .unwrap();
 

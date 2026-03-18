@@ -238,12 +238,16 @@ src/
 - [x] **Tests**: Message rendering, send/reply flow
 
 ### Phase 4: Images & Attachments
-- [ ] Detect terminal graphics capability via `ratatui-image` picker
-- [ ] Render inline images in message view (MMS pictures)
-- [ ] `requestAttachmentFile()` + `attachmentReceived` signal flow
-- [ ] Cache downloaded attachments in XDG cache dir
+- [x] Detect terminal graphics capability via `ratatui-image` picker (Sixel/Kitty/halfblock)
+- [x] Auto-download image attachments when viewing a conversation
+- [x] Render inline images in message view via `StatefulImage`
+- [x] Show `[Downloading...]` placeholder while fetching, `[Image failed: ...]` on error
+- [x] `requestAttachmentFile()` + `attachmentReceived` signal flow
+- [x] Uses kdeconnect's built-in cache (`~/.cache/kdeconnect/{device_name}/`)
+- [ ] Non-image attachments: open via `xdg-open` on keypress
+- [ ] Allow selecting and downloading/saving images to a chosen path
 - [ ] Attachment picker for sending (file browser dialog or path input)
-- [ ] **Tests**: Image protocol detection, attachment download/cache
+- [ ] **Tests**: attachment download/cache
 
 ### Phase 5: Group Messages & Replies
 - [x] Handle multi-address conversations (group detection via address count)
@@ -266,6 +270,7 @@ src/
 - [x] Config file for: default device, theme
 - [ ] Proper emoji rendering with grapheme cluster awareness
 - [ ] Clipboard support for copying message text
+- [ ] Show/hide archived and/or spam conversations (if supported by kdeconnect API)
 - [x] Panic hook to restore terminal on crash
 - [x] Safe string truncation (char-boundary-aware)
 - [x] **Tests**: Config parsing

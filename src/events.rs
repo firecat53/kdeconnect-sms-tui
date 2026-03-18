@@ -23,6 +23,8 @@ pub enum AppEvent {
     ConversationRemoved(i64),
     /// Conversations finished loading from device
     ConversationsLoaded,
+    /// D-Bus: attachment file received (file_path, file_name)
+    AttachmentReceived(String, String),
 }
 
 /// Spawns an async event loop using crossterm's EventStream.

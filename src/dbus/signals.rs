@@ -86,6 +86,14 @@ async fn listen_signals(
                 debug!("Signal: conversationLoaded");
                 let _ = tx.send(AppEvent::ConversationsLoaded);
             }
+            Some("attachmentReceived") => {
+                if let Ok((file_path, file_name)) = msg.body().deserialize::<(String, String)>() {
+                    debug!("Signal: attachmentReceived path={} name={}", file_path, file_name);
+                    if tx.send(AppEvent::AttachmentReceived(file_path, file_name)).is_err() {
+                        break;
+                    }
+                }
+            }
             Some(other) => {
                 debug!("Ignoring signal: {}", other);
             }

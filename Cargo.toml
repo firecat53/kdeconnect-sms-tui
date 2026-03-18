@@ -6,8 +6,8 @@ description = "Terminal UI for sending/receiving SMS via KDE Connect"
 license = "MIT"
 
 [dependencies]
-ratatui = "0.29"
-crossterm = { version = "0.28", features = ["event-stream"] }
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
 ratatui-image = { version = "10", default-features = false, features = ["crossterm", "image-defaults", "serde", "tokio"] }
 image = "0.25"
 zbus = { version = "5", default-features = false, features = ["tokio"] }
