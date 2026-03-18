@@ -598,6 +598,14 @@ impl App {
                     .and_then(|r| r.with_guessed_format())
                     .map_err(image::ImageError::IoError)
                     .and_then(|r| r.decode());
+                let load_result = match load_result {
+                    Ok(img) => Ok(img),
+                    Err(_) => {
+                        // Fallback: try converting via ImageMagick or heif-convert.
+                        // Handles HEIC and other formats the image crate can't decode.
+                        Self::convert_image_external(&path)
+                    }
+                };
                 match load_result {
                     Ok(dyn_img) => {
                         let protocol = picker.new_resize_protocol(dyn_img);
@@ -618,6 +626,49 @@ impl App {
         }
 
         self.pending_attachments.remove(file_stem);
+    }
+
+    /// Try to convert an image file to PNG using an external tool (ImageMagick or
+    /// heif-convert).  This handles HEIC and other formats the `image` crate
+    /// cannot decode natively.
+    fn convert_image_external(path: impl AsRef<std::path::Path>) -> Result<image::DynamicImage, image::ImageError> {
+        use std::process::Command;
+
+        let path = path.as_ref();
+        let tmp = std::env::temp_dir().join(format!(
+            "kdeconnect-sms-tui-conv-{}.png",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+
+        // Try ImageMagick first, then heif-convert.
+        let attempts: &[(&str, &[&str])] = &[
+            ("magick", &["convert"]),
+            ("heif-convert", &[]),
+        ];
+
+        for (bin, pre_args) in attempts {
+            let mut cmd = Command::new(bin);
+            cmd.args(*pre_args).arg(path).arg(&tmp);
+            if let Ok(output) = cmd.output() {
+                if output.status.success() && tmp.exists() {
+                    let result = image::open(&tmp);
+                    let _ = std::fs::remove_file(&tmp);
+                    return result;
+                }
+            }
+        }
+
+        Err(image::ImageError::Unsupported(
+            image::error::UnsupportedError::from_format_and_kind(
+                image::error::ImageFormatHint::Unknown,
+                image::error::UnsupportedErrorKind::Format(
+                    image::error::ImageFormatHint::Unknown,
+                ),
+            ),
+        ))
     }
 
     /// Request downloads for all image attachments in the currently selected conversation.

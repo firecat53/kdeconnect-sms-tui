@@ -3,7 +3,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 use ratatui_image::StatefulImage;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, ImageState};
 use super::theme;
@@ -28,17 +28,52 @@ impl RenderItem {
                 if width == 0 {
                     return lines.len() as u16;
                 }
-                // Estimate wrapped height using display width (not byte length)
-                // so that emoji and wide characters are measured correctly.
-                lines.iter().map(|line| {
-                    let w: usize = line.spans.iter().map(|s| s.content.width()).sum();
-                    1.max(w.div_ceil(width as usize)) as u16
-                }).sum()
+                lines.iter().map(|line| wrapped_line_height(line, width as usize)).sum()
             }
             RenderItem::Image { height, .. } => *height,
             RenderItem::ImagePlaceholder(_) => 1,
         }
     }
+}
+
+/// Calculate the number of terminal rows a Line occupies when word-wrapped
+/// to `width` columns, matching ratatui's wrapping behaviour.  A wide
+/// character (e.g. emoji, CJK) that would start in the last column is
+/// wrapped to the next row.
+fn wrapped_line_height(line: &Line<'_>, width: usize) -> u16 {
+    let mut rows: u16 = 1;
+    let mut col: usize = 0;
+    for span in &line.spans {
+        for ch in span.content.chars() {
+            let cw = ch.width().unwrap_or(0);
+            if cw == 0 {
+                continue;
+            }
+            if col + cw > width {
+                // Character doesn't fit on this row – wrap.
+                rows += 1;
+                col = cw;
+            } else {
+                col += cw;
+                if col == width {
+                    // Exactly filled the row.  The *next* character (if any)
+                    // will start a new row; but we don't bump rows here
+                    // because ratatui only creates a new row when there is
+                    // actually a character to place.
+                    //
+                    // Reset col so the next char starts a fresh row.
+                    col = 0;
+                    rows += 1;
+                }
+            }
+        }
+    }
+    // If we just bumped rows at the exact boundary but there were no more
+    // characters after it, we over-counted by 1.
+    if col == 0 && rows > 1 {
+        rows -= 1;
+    }
+    rows.max(1)
 }
 
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
@@ -343,5 +378,37 @@ mod tests {
 
         let content = crate::ui::test_helpers::buffer_to_string(terminal.backend().buffer());
         assert!(content.contains("Loading messages"));
+    }
+
+    #[test]
+    fn test_wrapped_line_height_ascii() {
+        // 10 chars in 10 cols = 1 row
+        let line = Line::from("0123456789");
+        assert_eq!(wrapped_line_height(&line, 10), 1);
+        // 11 chars in 10 cols = 2 rows
+        let line = Line::from("01234567890");
+        assert_eq!(wrapped_line_height(&line, 10), 2);
+    }
+
+    #[test]
+    fn test_wrapped_line_height_emoji_at_boundary() {
+        // "12345678" is 8 cols, then a 2-wide emoji fits exactly at cols 9-10
+        let line = Line::from("12345678\u{1F600}"); // 😀 is 2 cols wide
+        assert_eq!(wrapped_line_height(&line, 10), 1);
+
+        // "123456789" is 9 cols, emoji needs 2 cols but only 1 remains → wraps
+        let line = Line::from("123456789\u{1F600}");
+        assert_eq!(wrapped_line_height(&line, 10), 2);
+    }
+
+    #[test]
+    fn test_wrapped_line_height_multiple_emoji() {
+        // 5 emoji × 2 cols each = 10 cols = 1 row in width 10
+        let line = Line::from("\u{1F600}\u{1F601}\u{1F602}\u{1F603}\u{1F604}");
+        assert_eq!(wrapped_line_height(&line, 10), 1);
+
+        // 6 emoji × 2 cols = 12 cols → 2 rows in width 10
+        let line = Line::from("\u{1F600}\u{1F601}\u{1F602}\u{1F603}\u{1F604}\u{1F605}");
+        assert_eq!(wrapped_line_height(&line, 10), 2);
     }
 }
