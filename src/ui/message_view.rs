@@ -3,6 +3,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 use ratatui_image::StatefulImage;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, ImageState};
 use super::theme;
@@ -27,9 +28,10 @@ impl RenderItem {
                 if width == 0 {
                     return lines.len() as u16;
                 }
-                // Estimate wrapped height
+                // Estimate wrapped height using display width (not byte length)
+                // so that emoji and wide characters are measured correctly.
                 lines.iter().map(|line| {
-                    let w: usize = line.spans.iter().map(|s| s.content.len()).sum();
+                    let w: usize = line.spans.iter().map(|s| s.content.width()).sum();
                     1.max(w.div_ceil(width as usize)) as u16
                 }).sum()
             }
@@ -202,13 +204,16 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
             RenderItem::Image { uid, height } => {
-                let visible_height = (*height).min(available);
-                if visible_height > 0 && item_top >= 0 {
+                // Only render images when fully visible.  When partially
+                // clipped at the viewport edge, `available` changes each
+                // frame, which causes StatefulProtocol to re-encode and
+                // produces visible flickering.
+                if item_top >= 0 && *height <= available {
                     let img_area = Rect {
                         x: inner.x,
                         y: inner.y + render_y,
                         width: inner_width.min(40),
-                        height: visible_height,
+                        height: *height,
                     };
                     if let Some(ImageState::Loaded(protocol)) = app.image_states.get_mut(uid) {
                         let image_widget = StatefulImage::<ratatui_image::protocol::StatefulProtocol>::default();

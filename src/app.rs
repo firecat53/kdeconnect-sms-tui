@@ -586,7 +586,15 @@ impl App {
                 });
 
             if is_image {
-                match image::open(&path) {
+                // Use content-based format detection instead of relying on file
+                // extension.  KDE Connect attachment filenames often lack a proper
+                // extension, causing `image::open()` to fail with
+                // "The image format could not be determined".
+                let load_result = image::ImageReader::open(&path)
+                    .and_then(|r| r.with_guessed_format())
+                    .map_err(image::ImageError::IoError)
+                    .and_then(|r| r.decode());
+                match load_result {
                     Ok(dyn_img) => {
                         let protocol = picker.new_resize_protocol(dyn_img);
                         self.image_states.insert(
