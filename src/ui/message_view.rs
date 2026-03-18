@@ -73,10 +73,28 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         }
     }
 
+    // Inner dimensions exclude block borders (2 rows, 2 cols)
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let inner_width = area.width.saturating_sub(2) as usize;
+
+    // Estimate total wrapped lines for auto-scroll to bottom.
+    let total_lines: usize = if inner_width > 0 {
+        lines.iter().map(|line| {
+            let width: usize = line.spans.iter().map(|s| s.content.len()).sum();
+            1.max(width.div_ceil(inner_width))
+        }).sum()
+    } else {
+        lines.len()
+    };
+
+    // message_scroll is an offset FROM the bottom (0 = newest visible).
+    let max_scroll = total_lines.saturating_sub(inner_height);
+    let scroll_offset = max_scroll.saturating_sub(app.message_scroll as usize) as u16;
+
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })
-        .scroll((app.message_scroll, 0));
+        .scroll((scroll_offset, 0));
 
     f.render_widget(paragraph, area);
 }

@@ -237,9 +237,10 @@ impl App {
                 let count = self.conversations.len();
                 self.status_message = Some(format!("{} conversations loaded", count));
 
-                // Auto-select first if none selected
+                // Auto-select first if none selected, and request its messages
                 if self.selected_conversation_idx.is_none() && !self.conversations.is_empty() {
                     self.selected_conversation_idx = Some(0);
+                    self.request_selected_conversation_messages();
                 }
             }
             Err(e) => {
@@ -283,6 +284,7 @@ impl App {
 
                 if self.selected_conversation_idx.is_none() && !self.conversations.is_empty() {
                     self.selected_conversation_idx = Some(0);
+                    self.request_selected_conversation_messages();
                 }
             }
             Err(e) => {
@@ -529,12 +531,12 @@ impl App {
                 }
             }
 
-            // Message scrolling
+            // Message scrolling (scroll is offset from bottom: 0 = newest)
             KeyCode::PageUp => {
-                self.message_scroll = self.message_scroll.saturating_sub(10);
+                self.message_scroll = self.message_scroll.saturating_add(10);
             }
             KeyCode::PageDown => {
-                self.message_scroll = self.message_scroll.saturating_add(10);
+                self.message_scroll = self.message_scroll.saturating_sub(10);
             }
 
             _ => {}
@@ -619,12 +621,12 @@ impl App {
                 self.compose_cursor += c.len_utf8();
             }
 
-            // Message scrolling while composing
+            // Message scrolling while composing (scroll is offset from bottom)
             KeyCode::PageUp => {
-                self.message_scroll = self.message_scroll.saturating_sub(10);
+                self.message_scroll = self.message_scroll.saturating_add(10);
             }
             KeyCode::PageDown => {
-                self.message_scroll = self.message_scroll.saturating_add(10);
+                self.message_scroll = self.message_scroll.saturating_sub(10);
             }
 
             _ => {}
