@@ -389,6 +389,14 @@ impl App {
                 Some(event) = signal_events.recv() => {
                     needs_redraw = true;
                     self.handle_event(event, signal_tx.clone()).await;
+                    // Drain any additional pending signals before redrawing
+                    // so that rapid-fire message loads during conversation
+                    // init are batched into a single redraw.  This prevents
+                    // images from being re-encoded on every intermediate
+                    // layout shift.
+                    while let Ok(event) = signal_events.try_recv() {
+                        self.handle_event(event, signal_tx.clone()).await;
+                    }
                 }
             }
         }
