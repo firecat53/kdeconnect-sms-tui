@@ -368,18 +368,26 @@ impl App {
         // Connect to initially selected device
         self.connect_to_device(signal_tx.clone()).await;
 
-        // Main loop
+        // Main loop — only redraw when state actually changed.  Redrawing
+        // on every tick causes protocol-based images (Kitty/Sixel) to
+        // flicker because the escape sequences reposition the cursor.
+        let mut needs_redraw = true;
         while !self.should_quit {
-            terminal.draw(|f| {
-                crate::ui::draw(f, self);
-            })?;
+            if needs_redraw {
+                terminal.draw(|f| {
+                    crate::ui::draw(f, self);
+                })?;
+                needs_redraw = false;
+            }
 
             // Wait for either terminal or D-Bus signal events
             tokio::select! {
                 Some(event) = term_events.recv() => {
+                    needs_redraw = !matches!(&event, AppEvent::Tick);
                     self.handle_event(event, signal_tx.clone()).await;
                 }
                 Some(event) = signal_events.recv() => {
+                    needs_redraw = true;
                     self.handle_event(event, signal_tx.clone()).await;
                 }
             }
