@@ -196,6 +196,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
     // message_scroll is an offset FROM the bottom (0 = newest visible)
     let max_scroll = total_height.saturating_sub(inner_height);
+    // Clamp so the user can't scroll past the oldest message.
+    app.message_scroll = app.message_scroll.min(max_scroll);
     let scroll_offset = max_scroll.saturating_sub(app.message_scroll) as i32;
 
     // Render visible items
@@ -240,15 +242,12 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
             RenderItem::Image { uid, height } => {
-                // Render images at their full fixed height so StatefulProtocol
-                // always sees the same Rect dimensions and never re-encodes
-                // (which causes flickering).  ratatui's Buffer silently clips
-                // anything that extends beyond the visible area, so images
-                // partially below the viewport are simply cropped.
-                //
-                // Images partially above the viewport (item_top < 0) are
-                // skipped because we cannot offset *within* a protocol image.
-                if item_top >= 0 {
+                // Only render when fully visible.  Protocol-based images
+                // (Kitty, Sixel) use escape sequences positioned by the
+                // terminal — they cannot be clipped by ratatui's Buffer,
+                // so we must not extend the Rect beyond the viewport.
+                let fits = item_top >= 0 && *height <= available;
+                if fits {
                     let img_area = Rect {
                         x: inner.x,
                         y: inner.y + render_y,
