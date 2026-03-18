@@ -214,27 +214,28 @@ src/
 
 ### Phase 1: Project Skeleton & D-Bus Connection
 - [x] Cargo project setup with all dependencies
-- [ ] Connect to session bus, discover paired/reachable devices
-- [ ] Basic `kdeconnect-cli -l` equivalent via D-Bus
-- [ ] Minimal TUI that shows device list
-- [ ] **Tests**: D-Bus proxy mock, device parsing
+- [x] Connect to session bus, discover paired/reachable devices
+- [x] Basic `kdeconnect-cli -l` equivalent via D-Bus
+- [x] Minimal TUI that shows device list
+- [x] **Tests**: D-Bus proxy mock, device parsing
 
 ### Phase 2: Conversation List
-- [ ] Call `requestAllConversationThreads()` and `activeConversations()`
-- [ ] Parse conversation data from QDBusVariant format
-- [ ] Display conversation list with contact name/number, last message preview, timestamp
-- [ ] Listen for `conversationCreated`/`conversationUpdated`/`conversationRemoved` signals
-- [ ] Sort by most recent
-- [ ] **Tests**: Conversation parsing, sorting, signal handling
+- [x] Call `requestAllConversationThreads()` and `activeConversations()`
+- [x] Parse conversation data from QDBusVariant format
+- [x] Display conversation list with contact name/number, last message preview, timestamp
+- [x] Listen for `conversationCreated`/`conversationUpdated`/`conversationRemoved` signals
+- [x] Sort by most recent
+- [x] **Tests**: Conversation parsing, sorting, signal handling
 
 ### Phase 3: Message View & Sending
-- [ ] `requestConversation(id, start, end)` to fetch message history
-- [ ] Render message bubbles (sent vs received, timestamps)
-- [ ] Compose input box with text editing (multi-line)
-- [ ] `replyToConversation()` for sending in existing threads
-- [ ] `sendWithoutConversation()` for new messages
-- [ ] Scroll through message history, lazy-load older messages
-- [ ] **Tests**: Message rendering, send/reply flow
+- [x] `requestConversation(id, start, end)` to fetch message history
+- [x] Render message bubbles (sent vs received, timestamps)
+- [x] Compose input box with text editing (multi-line)
+- [x] `replyToConversation()` for sending in existing threads
+- [x] `sendWithoutConversation()` for new messages
+- [x] Scroll through message history (auto-scroll to newest)
+- [ ] Lazy-load older messages on scroll
+- [x] **Tests**: Message rendering, send/reply flow
 
 ### Phase 4: Images & Attachments
 - [ ] Detect terminal graphics capability via `ratatui-image` picker
@@ -245,27 +246,29 @@ src/
 - [ ] **Tests**: Image protocol detection, attachment download/cache
 
 ### Phase 5: Group Messages & Replies
-- [ ] Handle multi-address conversations (group detection)
+- [x] Handle multi-address conversations (group detection via address count)
 - [ ] Display group member list
 - [ ] Group rename functionality (stored locally in config)
 - [ ] Reply context (quote/reference previous message if supported)
-- [ ] **Tests**: Group detection, rename persistence
+- [x] **Tests**: Group detection
 
 ### Phase 6: Device Switching
-- [ ] Top bar showing current device with dropdown/selector
-- [ ] Switch device → reload conversations
-- [ ] Handle device going offline (signal monitoring)
-- [ ] Auto-select first available device on startup
-- [ ] **Tests**: Device switch state transitions
+- [x] Top bar showing current device with selection indicator
+- [x] Switch device → reload conversations (Tab key)
+- [ ] Handle device going offline (signal monitoring — `deviceListChanged` not yet listened for)
+- [x] Auto-select first available device on startup
+- [x] **Tests**: Device switch state transitions
 
 ### Phase 7: Polish & UX
 - [ ] Keyboard shortcuts help overlay (?)
 - [ ] Search/filter conversations
 - [ ] Notification indicator for new messages (unread count)
-- [ ] Config file for: default device, theme, keybindings, image display preference
+- [x] Config file for: default device, theme
 - [ ] Proper emoji rendering with grapheme cluster awareness
 - [ ] Clipboard support for copying message text
-- [ ] **Tests**: Config parsing, keybinding handling
+- [x] Panic hook to restore terminal on crash
+- [x] Safe string truncation (char-boundary-aware)
+- [x] **Tests**: Config parsing
 
 ---
 
