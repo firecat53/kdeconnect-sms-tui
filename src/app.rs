@@ -56,6 +56,8 @@ pub struct App {
     pub selected_conversation_idx: Option<usize>,
     pub contacts: ContactStore,
     pub message_scroll: u16,
+    /// Last known height of the message viewport (set during render).
+    pub message_view_height: u16,
     pub should_quit: bool,
     pub loading: LoadingState,
     pub status_message: Option<String>,
@@ -104,6 +106,7 @@ impl App {
             selected_conversation_idx: None,
             contacts,
             message_scroll: 0,
+            message_view_height: 0,
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
@@ -158,6 +161,7 @@ impl App {
                     ContactStore::load_from_dir(&std::env::temp_dir()).unwrap()
                 }),
             message_scroll: 0,
+            message_view_height: 0,
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
@@ -774,10 +778,12 @@ impl App {
 
             // Message scrolling (scroll is offset from bottom: 0 = newest)
             KeyCode::PageUp => {
-                self.message_scroll = self.message_scroll.saturating_add(10);
+                let page = self.message_view_height.max(1);
+                self.message_scroll = self.message_scroll.saturating_add(page);
             }
             KeyCode::PageDown => {
-                self.message_scroll = self.message_scroll.saturating_sub(10);
+                let page = self.message_view_height.max(1);
+                self.message_scroll = self.message_scroll.saturating_sub(page);
             }
 
             _ => {}
@@ -863,11 +869,19 @@ impl App {
             }
 
             // Message scrolling while composing (scroll is offset from bottom)
+            KeyCode::Up => {
+                self.message_scroll = self.message_scroll.saturating_add(1);
+            }
+            KeyCode::Down => {
+                self.message_scroll = self.message_scroll.saturating_sub(1);
+            }
             KeyCode::PageUp => {
-                self.message_scroll = self.message_scroll.saturating_add(10);
+                let page = self.message_view_height.max(1);
+                self.message_scroll = self.message_scroll.saturating_add(page);
             }
             KeyCode::PageDown => {
-                self.message_scroll = self.message_scroll.saturating_sub(10);
+                let page = self.message_view_height.max(1);
+                self.message_scroll = self.message_scroll.saturating_sub(page);
             }
 
             _ => {}

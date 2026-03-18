@@ -154,6 +154,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
     let inner_width = inner.width;
     let inner_height = inner.height;
+    app.message_view_height = inner_height;
 
     // Calculate total content height
     let total_height: u16 = items.iter().map(|item| item.height(inner_width)).sum();
@@ -204,11 +205,15 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
             RenderItem::Image { uid, height } => {
-                // Only render images when fully visible.  When partially
-                // clipped at the viewport edge, `available` changes each
-                // frame, which causes StatefulProtocol to re-encode and
-                // produces visible flickering.
-                if item_top >= 0 && *height <= available {
+                // Render images at their full fixed height so StatefulProtocol
+                // always sees the same Rect dimensions and never re-encodes
+                // (which causes flickering).  ratatui's Buffer silently clips
+                // anything that extends beyond the visible area, so images
+                // partially below the viewport are simply cropped.
+                //
+                // Images partially above the viewport (item_top < 0) are
+                // skipped because we cannot offset *within* a protocol image.
+                if item_top >= 0 {
                     let img_area = Rect {
                         x: inner.x,
                         y: inner.y + render_y,
