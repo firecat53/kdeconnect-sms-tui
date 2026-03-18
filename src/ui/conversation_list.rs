@@ -75,13 +75,13 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 .map(|m| format_timestamp(m.date))
                 .unwrap_or_default();
 
-            // Preview text
+            // Preview text — truncate on a char boundary to avoid panics
+            // with multi-byte characters (emoji, accented chars, etc.)
             let preview = conv.preview_text();
-            // Calculate available width (area minus borders minus padding)
-            let max_preview_len = area.width.saturating_sub(4) as usize;
-            let preview_truncated = if preview.len() > max_preview_len {
-                let end = max_preview_len.saturating_sub(3);
-                format!("{}...", &preview[..end])
+            let max_chars = area.width.saturating_sub(4) as usize;
+            let preview_truncated: String = if preview.chars().count() > max_chars {
+                let truncated: String = preview.chars().take(max_chars.saturating_sub(3)).collect();
+                format!("{}...", truncated)
             } else {
                 preview.to_string()
             };

@@ -31,6 +31,19 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
     let args = Args::parse();
 
+    // Install a panic hook that restores the terminal before printing
+    // the panic message, so the user doesn't end up with an unusable
+    // terminal.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen
+        );
+        original_hook(panic_info);
+    }));
+
     // Only enable tracing if --log-file is specified; writing to stderr
     // corrupts the TUI display (especially inside tmux).
     if let Some(ref path) = args.log_file {
