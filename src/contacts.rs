@@ -65,9 +65,40 @@ impl ContactStore {
     }
 
     /// Look up a display name for a phone number.
+    ///
+    /// Tries an exact normalized match first, then falls back to suffix
+    /// matching (last 10 digits) to handle country-code mismatches — e.g.
+    /// vCard stores `+15551234567` but kdeconnect sends `5551234567`.
     pub fn lookup(&self, phone: &str) -> Option<&str> {
         let normalized = normalize_phone(phone);
-        self.contacts.get(&normalized).map(|s| s.as_str())
+
+        // Exact match
+        if let Some(name) = self.contacts.get(&normalized) {
+            return Some(name.as_str());
+        }
+
+        // Suffix match: compare last 10 digits (covers US/CA numbers without
+        // country code and most international numbers).
+        let suffix = digit_suffix(&normalized, 10);
+        if suffix.len() >= 7 {
+            for (stored, name) in &self.contacts {
+                if digit_suffix(stored, 10) == suffix {
+                    debug!(
+                        "Contact suffix match: '{}' matched stored '{}' -> '{}'",
+                        phone, stored, name
+                    );
+                    return Some(name.as_str());
+                }
+            }
+        }
+
+        debug!(
+            "No contact found for '{}' (normalized: '{}', {} contacts loaded)",
+            phone,
+            normalized,
+            self.contacts.len()
+        );
+        None
     }
 
     /// Get display name or fall back to the phone number.
@@ -161,6 +192,16 @@ pub fn normalize_phone(phone: &str) -> String {
     digits
 }
 
+/// Return the last `n` digits of a phone string (ignoring `+`).
+fn digit_suffix(phone: &str, n: usize) -> String {
+    let digits: String = phone.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() <= n {
+        digits
+    } else {
+        digits[digits.len() - n..].to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,6 +287,39 @@ END:VCARD
         let store = ContactStore::load_from_dir(dir.path()).unwrap();
         assert_eq!(store.len(), 3);
         assert_eq!(store.lookup("+15551234567"), Some("Alice Smith"));
+    }
+
+    #[test]
+    fn test_lookup_suffix_matching() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("contact1.vcf");
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(SAMPLE_VCARD.as_bytes()).unwrap();
+
+        let store = ContactStore::load_from_dir(dir.path()).unwrap();
+
+        // Exact match
+        assert_eq!(store.lookup("+15551234567"), Some("Alice Smith"));
+
+        // Missing country code — should still match via suffix
+        assert_eq!(store.lookup("5551234567"), Some("Alice Smith"));
+
+        // With formatting — should still match
+        assert_eq!(store.lookup("(555) 123-4567"), Some("Alice Smith"));
+
+        // UK number without + prefix
+        assert_eq!(store.lookup("442071234567"), Some("Bob Jones"));
+
+        // No match at all
+        assert_eq!(store.lookup("9999999999"), None);
+    }
+
+    #[test]
+    fn test_digit_suffix() {
+        assert_eq!(digit_suffix("+15551234567", 10), "5551234567");
+        assert_eq!(digit_suffix("5551234567", 10), "5551234567");
+        assert_eq!(digit_suffix("+442071234567", 10), "2071234567");
+        assert_eq!(digit_suffix("123", 10), "123");
     }
 
     #[test]

@@ -45,6 +45,12 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 .display_name
                 .as_deref()
                 .or_else(|| {
+                    app.config
+                        .group_names
+                        .get(&conv.thread_id.to_string())
+                        .map(|s| s.as_str())
+                })
+                .or_else(|| {
                     conv.primary_address()
                         .and_then(|addr| app.contacts.lookup(addr))
                 })
