@@ -26,17 +26,35 @@ impl ContactStore {
     }
 
     /// Load contacts from a specific directory (useful for testing).
+    ///
+    /// Recurses into subdirectories, since KDE Connect stores vCards in
+    /// per-device subdirectories under `~/.local/share/kpeoplevcard/`.
     pub fn load_from_dir(dir: &Path) -> Result<Self> {
         let mut contacts = HashMap::new();
+        Self::load_vcards_recursive(dir, &mut contacts);
+        debug!("Loaded {} contacts from {:?}", contacts.len(), dir);
+        Ok(Self { contacts })
+    }
 
-        let entries = fs::read_dir(dir)?;
+    fn load_vcards_recursive(dir: &Path, contacts: &mut HashMap<String, String>) {
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(e) => {
+                warn!("Failed to read directory {:?}: {}", dir, e);
+                return;
+            }
+        };
         for entry in entries.flatten() {
             let path = entry.path();
+            if path.is_dir() {
+                Self::load_vcards_recursive(&path, contacts);
+                continue;
+            }
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if ext == "vcf" || ext == "vcard" {
                 match fs::read_to_string(&path) {
                     Ok(content) => {
-                        parse_vcard_contacts(&content, &mut contacts);
+                        parse_vcard_contacts(&content, contacts);
                     }
                     Err(e) => {
                         warn!("Failed to read vCard {:?}: {}", path, e);
@@ -44,9 +62,6 @@ impl ContactStore {
                 }
             }
         }
-
-        debug!("Loaded {} contacts from {:?}", contacts.len(), dir);
-        Ok(Self { contacts })
     }
 
     /// Look up a display name for a phone number.
@@ -216,6 +231,21 @@ END:VCARD
         let mut contacts = HashMap::new();
         parse_vcard_contacts(vcard, &mut contacts);
         assert_eq!(contacts.get("+34612345678").unwrap(), "Ñoño García");
+    }
+
+    #[test]
+    fn test_load_from_subdirectories() {
+        let dir = TempDir::new().unwrap();
+        // Simulate per-device subdirectory structure
+        let device_dir = dir.path().join("kdeconnect_abc123");
+        fs::create_dir(&device_dir).unwrap();
+        let path = device_dir.join("contact1.vcf");
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(SAMPLE_VCARD.as_bytes()).unwrap();
+
+        let store = ContactStore::load_from_dir(dir.path()).unwrap();
+        assert_eq!(store.len(), 3);
+        assert_eq!(store.lookup("+15551234567"), Some("Alice Smith"));
     }
 
     #[test]
