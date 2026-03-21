@@ -58,6 +58,8 @@ pub struct App {
     pub message_scroll: u16,
     /// Last known height of the message viewport (set during render).
     pub message_view_height: u16,
+    /// Maximum scroll offset (set during render). Used to detect scroll-to-top.
+    pub message_max_scroll: u16,
     pub should_quit: bool,
     pub loading: LoadingState,
     pub status_message: Option<String>,
@@ -107,6 +109,7 @@ impl App {
             contacts,
             message_scroll: 0,
             message_view_height: 0,
+            message_max_scroll: 0,
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
@@ -162,6 +165,7 @@ impl App {
                 }),
             message_scroll: 0,
             message_view_height: 0,
+            message_max_scroll: 0,
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
@@ -429,7 +433,11 @@ impl App {
             AppEvent::ConversationRemoved(thread_id) => {
                 self.handle_conversation_removed(thread_id);
             }
-            AppEvent::ConversationsLoaded => {
+            AppEvent::ConversationLoaded(thread_id, message_count) => {
+                // Record the total message count so pagination knows when to stop.
+                if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
+                    conv.total_messages = Some(message_count);
+                }
                 // Phone finished sending data — only fetch cached results.
                 // Do NOT call request_all_conversation_threads() here or it
                 // creates an infinite loop (request → signal → request → …).
@@ -491,31 +499,87 @@ impl App {
 
     /// Request message history for the currently selected conversation.
     /// Spawns the D-Bus call as a background task so it doesn't block the UI.
+    /// Batch size for message pagination.
+    const MESSAGE_PAGE_SIZE: i32 = 50;
+
     fn request_selected_conversation_messages(&mut self) {
         let Some(idx) = self.selected_conversation_idx else {
             return;
         };
-        let Some(conv) = self.conversations.get(idx) else {
+        let Some(conv) = self.conversations.get_mut(idx) else {
             return;
         };
         let Some(ref client) = self.conversations_client else {
             return;
         };
 
+        // Only request the initial batch if we haven't loaded yet.
+        if conv.messages_requested > 0 {
+            return;
+        }
+
         let thread_id = conv.thread_id;
+        let end = Self::MESSAGE_PAGE_SIZE;
+        conv.messages_requested = end;
+
         let connection = client.connection().clone();
         let device_id = client.device_id().to_owned();
 
         // Fire-and-forget: the phone will send messages back via D-Bus signals
         tokio::spawn(async move {
             let client = ConversationsClient::new(connection, device_id);
-            if let Err(e) = client.request_conversation(thread_id, 0, 50).await {
+            if let Err(e) = client.request_conversation(thread_id, 0, end).await {
                 tracing::warn!("Failed to request conversation {}: {}", thread_id, e);
             }
         });
 
         // Also request any image attachments
         self.request_conversation_attachments();
+    }
+
+    /// Load the next page of older messages for the selected conversation.
+    fn load_more_messages(&mut self) {
+        let Some(idx) = self.selected_conversation_idx else {
+            return;
+        };
+        let Some(conv) = self.conversations.get_mut(idx) else {
+            return;
+        };
+        if !conv.has_more_messages() {
+            return;
+        }
+        let Some(ref client) = self.conversations_client else {
+            return;
+        };
+
+        let thread_id = conv.thread_id;
+        let start = conv.messages_requested;
+        let end = start + Self::MESSAGE_PAGE_SIZE;
+        conv.messages_requested = end;
+
+        let connection = client.connection().clone();
+        let device_id = client.device_id().to_owned();
+
+        tokio::spawn(async move {
+            let client = ConversationsClient::new(connection, device_id);
+            if let Err(e) = client.request_conversation(thread_id, start, end).await {
+                tracing::warn!("Failed to load more messages for {}: {}", thread_id, e);
+            }
+        });
+    }
+
+    /// If the user has scrolled near the top of the message view, request
+    /// the next page of older messages.
+    fn maybe_load_more_on_scroll(&mut self) {
+        // message_scroll is an offset from the bottom (0 = newest visible).
+        // Trigger loading one full page before reaching the top so messages
+        // are ready before the user scrolls up to them.
+        let threshold = self.message_view_height.max(1);
+        if self.message_max_scroll > 0
+            && self.message_scroll >= self.message_max_scroll.saturating_sub(threshold)
+        {
+            self.load_more_messages();
+        }
     }
 
     /// Handle a conversation being removed.
@@ -796,6 +860,7 @@ impl App {
             KeyCode::PageUp => {
                 let page = self.message_view_height.max(1);
                 self.message_scroll = self.message_scroll.saturating_add(page);
+                self.maybe_load_more_on_scroll();
             }
             KeyCode::PageDown => {
                 let page = self.message_view_height.max(1);
@@ -887,6 +952,7 @@ impl App {
             // Message scrolling while composing (scroll is offset from bottom)
             KeyCode::Up => {
                 self.message_scroll = self.message_scroll.saturating_add(1);
+                self.maybe_load_more_on_scroll();
             }
             KeyCode::Down => {
                 self.message_scroll = self.message_scroll.saturating_sub(1);
@@ -894,6 +960,7 @@ impl App {
             KeyCode::PageUp => {
                 let page = self.message_view_height.max(1);
                 self.message_scroll = self.message_scroll.saturating_add(page);
+                self.maybe_load_more_on_scroll();
             }
             KeyCode::PageDown => {
                 let page = self.message_view_height.max(1);

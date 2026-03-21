@@ -198,6 +198,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let max_scroll = total_height.saturating_sub(inner_height);
     // Clamp so the user can't scroll past the oldest message.
     app.message_scroll = app.message_scroll.min(max_scroll);
+    app.message_max_scroll = max_scroll;
     let scroll_offset = max_scroll.saturating_sub(app.message_scroll) as i32;
 
     // Render visible items
@@ -336,6 +337,8 @@ mod tests {
             ],
             is_group: false,
             display_name: None,
+            messages_requested: 0,
+            total_messages: None,
         });
         app.selected_conversation_idx = Some(0);
 
@@ -363,6 +366,8 @@ mod tests {
             messages: vec![], // messages not yet loaded
             is_group: false,
             display_name: None,
+            messages_requested: 0,
+            total_messages: None,
         });
         app.selected_conversation_idx = Some(0);
 

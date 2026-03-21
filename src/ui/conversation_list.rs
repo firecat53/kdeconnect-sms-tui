@@ -204,6 +204,8 @@ mod tests {
             messages: vec![],
             is_group: false,
             display_name: None,
+            messages_requested: 0,
+            total_messages: None,
         });
 
         let backend = TestBackend::new(40, 10);
@@ -228,6 +230,8 @@ mod tests {
             messages: vec![],
             is_group: true,
             display_name: Some("Family".into()),
+            messages_requested: 0,
+            total_messages: None,
         });
 
         let backend = TestBackend::new(40, 10);

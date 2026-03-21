@@ -82,9 +82,16 @@ async fn listen_signals(
                 }
             }
             Some("conversationLoaded") => {
-                // Just trigger a refresh
-                debug!("Signal: conversationLoaded");
-                let _ = tx.send(AppEvent::ConversationsLoaded);
+                // Signal carries (conversationID: i64, messageCount: u64)
+                let (thread_id, message_count) = msg
+                    .body()
+                    .deserialize::<(i64, u64)>()
+                    .unwrap_or((0, 0));
+                debug!(
+                    "Signal: conversationLoaded thread={} count={}",
+                    thread_id, message_count
+                );
+                let _ = tx.send(AppEvent::ConversationLoaded(thread_id, message_count));
             }
             Some("attachmentReceived") => {
                 if let Ok((file_path, file_name)) = msg.body().deserialize::<(String, String)>() {

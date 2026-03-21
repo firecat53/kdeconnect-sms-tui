@@ -13,6 +13,13 @@ pub struct Conversation {
     pub is_group: bool,
     /// Custom display name (for group rename)
     pub display_name: Option<String>,
+    /// How many messages we've requested so far (for lazy pagination).
+    #[serde(default)]
+    pub messages_requested: i32,
+    /// Total messages available on the phone (from conversationLoaded signal).
+    /// `None` means we don't know yet.
+    #[serde(default)]
+    pub total_messages: Option<u64>,
 }
 
 impl Conversation {
@@ -23,6 +30,17 @@ impl Conversation {
             messages: Vec::new(),
             is_group: false,
             display_name: None,
+            messages_requested: 0,
+            total_messages: None,
+        }
+    }
+
+    /// Whether more older messages may be available on the phone.
+    pub fn has_more_messages(&self) -> bool {
+        match self.total_messages {
+            Some(total) => (self.messages_requested as u64) < total,
+            // Don't know yet — assume yes if we've requested at least once
+            None => true,
         }
     }
 
@@ -79,6 +97,8 @@ mod tests {
             messages: Vec::new(),
             is_group: false,
             display_name: None,
+            messages_requested: 0,
+            total_messages: None,
         }
     }
 
@@ -113,5 +133,36 @@ mod tests {
     fn test_primary_address() {
         let c = make_conversation(1, 1000, "hi");
         assert_eq!(c.primary_address(), Some("+15551234"));
+    }
+
+    #[test]
+    fn test_has_more_messages_unknown_total() {
+        let c = Conversation::new(1);
+        // When total is unknown, assume more are available
+        assert!(c.has_more_messages());
+    }
+
+    #[test]
+    fn test_has_more_messages_not_all_requested() {
+        let mut c = Conversation::new(1);
+        c.total_messages = Some(100);
+        c.messages_requested = 50;
+        assert!(c.has_more_messages());
+    }
+
+    #[test]
+    fn test_has_more_messages_all_requested() {
+        let mut c = Conversation::new(1);
+        c.total_messages = Some(50);
+        c.messages_requested = 50;
+        assert!(!c.has_more_messages());
+    }
+
+    #[test]
+    fn test_has_more_messages_over_requested() {
+        let mut c = Conversation::new(1);
+        c.total_messages = Some(30);
+        c.messages_requested = 50;
+        assert!(!c.has_more_messages());
     }
 }

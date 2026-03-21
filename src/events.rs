@@ -21,8 +21,8 @@ pub enum AppEvent {
     ConversationUpdated(Message),
     /// D-Bus: conversation removed
     ConversationRemoved(i64),
-    /// Conversations finished loading from device
-    ConversationsLoaded,
+    /// D-Bus: conversation messages finished loading (thread_id, message_count)
+    ConversationLoaded(i64, u64),
     /// D-Bus: attachment file received (file_path, file_name)
     AttachmentReceived(String, String),
 }
