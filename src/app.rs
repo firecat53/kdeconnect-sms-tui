@@ -652,7 +652,7 @@ impl App {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             let is_image = matches!(
                 ext.to_lowercase().as_str(),
-                "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp"
+                "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "heic" | "heif"
             ) || file_stem
                 .split('.')
                 .next()
@@ -705,9 +705,47 @@ impl App {
         let Some(idx) = self.selected_conversation_idx else {
             return;
         };
-        let Some(conv) = self.conversations.get(idx) else {
+        let Some(conv) = self.conversations.get_mut(idx) else {
             return;
         };
+
+        // Scan the kdeconnect cache directory for files that already exist on
+        // disk but whose cached_path hasn't been set (e.g. from a prior session).
+        if let Some(device) = self.selected_device_idx.and_then(|i| self.devices.get(i)) {
+            let cache_dir = dirs::cache_dir()
+                .unwrap_or_else(|| PathBuf::from("~/.cache"))
+                .join("kdeconnect.daemon")
+                .join(&device.name);
+            if cache_dir.is_dir() {
+                for msg in &mut conv.messages {
+                    for att in &mut msg.attachments {
+                        if att.is_image() && att.cached_path.is_none() {
+                            let candidate = cache_dir.join(&att.unique_identifier);
+                            if candidate.exists() {
+                                tracing::debug!(
+                                    "Found cached attachment on disk: {:?}",
+                                    candidate
+                                );
+                                att.cached_path = Some(candidate);
+                            }
+                        }
+                    }
+                }
+                if let Some(ref mut msg) = conv.latest_message {
+                    for att in &mut msg.attachments {
+                        if att.is_image() && att.cached_path.is_none() {
+                            let candidate = cache_dir.join(&att.unique_identifier);
+                            if candidate.exists() {
+                                att.cached_path = Some(candidate);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Re-borrow as immutable for the rest of the method
+        let conv = &self.conversations[idx];
         let Some(ref client) = self.conversations_client else {
             return;
         };
