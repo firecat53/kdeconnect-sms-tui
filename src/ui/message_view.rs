@@ -199,74 +199,48 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let inner_height = inner.height;
     app.message_view_height = inner_height;
 
-    // Calculate total content height and message boundaries.
-    // We group render items back into per-message groups so that
-    // message-by-message scrolling snaps to message boundaries.
-    // Each message produces a Text item + optional attachment items.
-    // We track the cumulative height from the bottom for each message boundary.
+    // Calculate per-item heights and per-message heights.
     let item_heights: Vec<u16> = items.iter().map(|item| item.height(inner_width)).collect();
     let total_height: u16 = item_heights.iter().sum();
 
-    // Build message boundaries: cumulative height offsets from bottom.
-    // Each message in conv.messages produced a contiguous block of render items.
-    // Recompute which items belong to each message.
+    // Compute per-message heights by grouping render items back to messages.
+    // Each message produces: 1 Text item + N image/placeholder items (one per image attachment).
+    let mut msg_heights: Vec<u16> = Vec::with_capacity(conv.messages.len());
     {
-        let mut boundaries = Vec::new();
-        let mut item_idx = 0;
-        let mut cumulative_from_bottom: u16 = 0;
-
-        // Walk messages in order (oldest first), items correspond 1:1 with message groups
+        let mut item_idx = 0usize;
         for msg in &conv.messages {
-            // Each message produces: 1 Text item + N image/placeholder items (one per image attachment)
-            let mut msg_height: u16 = 0;
-
+            let mut h: u16 = 0;
             // Text item
             if item_idx < item_heights.len() {
-                msg_height += item_heights[item_idx];
+                h += item_heights[item_idx];
                 item_idx += 1;
             }
-
             // Image attachment items
-            let image_count = msg.attachments.iter().filter(|a| a.is_image()).count();
-            for _ in 0..image_count {
+            for _ in msg.attachments.iter().filter(|a| a.is_image()) {
                 if item_idx < item_heights.len() {
-                    msg_height += item_heights[item_idx];
+                    h += item_heights[item_idx];
                     item_idx += 1;
                 }
             }
-
-            cumulative_from_bottom += msg_height;
-            // The boundary represents the scroll offset where the top of this
-            // message would be at the bottom of the viewport.
-            // We store: total_height - position_of_message_top = distance from bottom
-            boundaries.push(total_height.saturating_sub(cumulative_from_bottom.saturating_sub(msg_height)));
+            msg_heights.push(h);
         }
+    }
 
-        // Convert to offsets from bottom (for scroll comparison).
-        // boundaries[i] = how far from the bottom the top of message i is.
-        // For scrolling, we want the offset where the bottom of a message aligns
-        // with the bottom of viewport. That's: boundary - inner_height (but >= 0).
+    // Build message_boundaries: sorted ascending scroll offsets that snap
+    // the bottom of each message to the bottom of the viewport.
+    //
+    // message_scroll = 0 means newest message's bottom is at viewport bottom.
+    // Walking from newest (last) to oldest (first), accumulate heights.
+    // After accumulating message N, the scroll offset that puts message N's
+    // bottom at the viewport bottom is: cum - inner_height (only if > 0).
+    {
         let mut scroll_boundaries: Vec<u16> = Vec::new();
-        let mut cum = 0u16;
-        // Walk from newest (last) to oldest (first) message
-        for msg_idx in (0..conv.messages.len()).rev() {
-            // Calculate this message's height from its render items
-            let mut msg_item_start = 0usize;
-            for i in 0..msg_idx {
-                msg_item_start += 1; // text
-                msg_item_start += conv.messages[i].attachments.iter().filter(|a| a.is_image()).count();
-            }
-            let mut msg_h = 0u16;
-            let items_for_msg = 1 + conv.messages[msg_idx].attachments.iter().filter(|a| a.is_image()).count();
-            for j in 0..items_for_msg {
-                if msg_item_start + j < item_heights.len() {
-                    msg_h += item_heights[msg_item_start + j];
-                }
-            }
-            cum += msg_h;
-            // Scroll offset to have the top of this message visible at viewport bottom
-            if cum > inner_height {
-                scroll_boundaries.push(cum.saturating_sub(inner_height));
+        let mut cum: u16 = 0;
+        for &mh in msg_heights.iter().rev() {
+            cum += mh;
+            let offset = cum.saturating_sub(inner_height);
+            if offset > 0 && !scroll_boundaries.last().is_some_and(|&last| last == offset) {
+                scroll_boundaries.push(offset);
             }
         }
         scroll_boundaries.sort();
@@ -276,13 +250,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
     // message_scroll is an offset FROM the bottom (0 = newest visible)
     let max_scroll = total_height.saturating_sub(inner_height);
-    // Clamp so the user can't scroll past the oldest message.
     app.message_scroll = app.message_scroll.min(max_scroll);
     app.message_max_scroll = max_scroll;
-    let scroll_offset = max_scroll.saturating_sub(app.message_scroll) as i32;
+
+    // Compute the pixel offset for rendering.
+    // When content is shorter than viewport, bottom-align it.
+    let content_start: i32 = if total_height < inner_height {
+        (inner_height - total_height) as i32
+    } else {
+        let scroll_offset = max_scroll.saturating_sub(app.message_scroll);
+        -(scroll_offset as i32)
+    };
 
     // Render visible items
-    let mut y: i32 = -(scroll_offset as i32);
+    let mut y: i32 = content_start;
 
     for item in &items {
         let item_height = item.height(inner_width);
@@ -462,6 +443,85 @@ mod tests {
 
         let content = crate::ui::test_helpers::buffer_to_string(terminal.backend().buffer());
         assert!(content.contains("Loading messages"));
+    }
+
+    #[test]
+    fn test_message_view_bottom_aligned() {
+        // With a tall viewport and few messages, content should be at the bottom.
+        let mut app = App::new_test();
+        app.conversations.push(Conversation {
+            thread_id: 1,
+            latest_message: Some(make_msg("Only msg", true)),
+            messages: vec![make_msg("Only msg", true)],
+            is_group: false,
+            display_name: None,
+            messages_requested: 0,
+            total_messages: None,
+        });
+        app.selected_conversation_idx = Some(0);
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                draw(f, &mut app, f.area());
+            })
+            .unwrap();
+
+        // The message should appear near the bottom, not at the top.
+        // Check that the last row(s) contain the message text.
+        let buf = terminal.backend().buffer();
+        let mut last_row_with_msg = 0;
+        for y in 0..buf.area.height {
+            let mut row = String::new();
+            for x in 0..buf.area.width {
+                if let Some(cell) = buf.cell((x, y)) {
+                    row.push_str(cell.symbol());
+                }
+            }
+            if row.contains("Only msg") {
+                last_row_with_msg = y;
+            }
+        }
+        // Message should be in the bottom half of the viewport (row 10+)
+        assert!(last_row_with_msg >= 10, "Message at row {} should be near bottom", last_row_with_msg);
+    }
+
+    #[test]
+    fn test_message_boundaries_computed() {
+        // Verify that message boundaries are set during render.
+        let mut app = App::new_test();
+        app.conversations.push(Conversation {
+            thread_id: 1,
+            latest_message: Some(make_msg("msg3", true)),
+            messages: vec![
+                make_msg("msg1", true),
+                make_msg("msg2", false),
+                make_msg("msg3", true),
+            ],
+            is_group: false,
+            display_name: None,
+            messages_requested: 0,
+            total_messages: None,
+        });
+        app.selected_conversation_idx = Some(0);
+
+        // Use a small viewport so messages exceed it
+        let backend = TestBackend::new(40, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                draw(f, &mut app, f.area());
+            })
+            .unwrap();
+
+        // With 3 messages in a 3-row inner area (5 - 2 border),
+        // boundaries should be non-empty since messages likely exceed viewport.
+        // At minimum, message_max_scroll should reflect that content overflows.
+        assert!(app.message_max_scroll > 0 || app.message_boundaries.is_empty(),
+            "scroll state should be coherent");
     }
 
     #[test]

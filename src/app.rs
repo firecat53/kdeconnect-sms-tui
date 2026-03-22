@@ -461,6 +461,12 @@ impl App {
                 // Do NOT call request_all_conversation_threads() here or it
                 // creates an infinite loop (request → signal → request → …).
                 self.refresh_cached_conversations().await;
+                // If the selected conversation's viewport isn't full, load more.
+                if let Some(idx) = self.selected_conversation_idx {
+                    if self.conversations.get(idx).is_some_and(|c| c.thread_id == thread_id) {
+                        self.maybe_load_more_on_scroll();
+                    }
+                }
             }
             AppEvent::AttachmentReceived(file_path, file_name) => {
                 self.handle_attachment_received(&file_path, &file_name);
@@ -587,16 +593,19 @@ impl App {
         });
     }
 
-    /// If the user has scrolled near the top of the message view, request
-    /// the next page of older messages.
+    /// If the user has scrolled near the top of the message view, or the
+    /// viewport isn't full yet, request the next page of older messages.
     fn maybe_load_more_on_scroll(&mut self) {
+        // If content doesn't fill the viewport, always try to load more.
+        if self.message_max_scroll == 0 {
+            self.load_more_messages();
+            return;
+        }
         // message_scroll is an offset from the bottom (0 = newest visible).
         // Trigger loading one full page before reaching the top so messages
         // are ready before the user scrolls up to them.
         let threshold = self.message_view_height.max(1);
-        if self.message_max_scroll > 0
-            && self.message_scroll >= self.message_max_scroll.saturating_sub(threshold)
-        {
+        if self.message_scroll >= self.message_max_scroll.saturating_sub(threshold) {
             self.load_more_messages();
         }
     }
@@ -1158,20 +1167,19 @@ impl App {
 
     /// Scroll up (toward older messages) by one message boundary.
     fn scroll_message_up(&mut self) {
-        // message_boundaries is sorted ascending: cumulative heights from bottom.
-        // Find the next boundary above current scroll.
+        // message_boundaries is sorted ascending.
+        // Find the next boundary strictly above current scroll position.
         if let Some(&next) = self.message_boundaries.iter().find(|&&b| b > self.message_scroll) {
-            // If the message is taller than the viewport, scroll by viewport instead
             let step = next - self.message_scroll;
             if step > self.message_view_height {
+                // Message is taller than viewport — scroll one page at a time.
                 self.message_scroll = self.message_scroll.saturating_add(self.message_view_height);
             } else {
                 self.message_scroll = next;
             }
-        } else {
-            // Already near the top, just add a line
-            self.message_scroll = self.message_scroll.saturating_add(1);
         }
+        // If no boundary above, we're already at/past the oldest — do nothing
+        // (max_scroll clamp in render will hold position).
     }
 
     /// Scroll down (toward newer messages) by one message boundary.
@@ -1179,7 +1187,7 @@ impl App {
         if self.message_scroll == 0 {
             return;
         }
-        // Find the next boundary below current scroll.
+        // Find the next boundary strictly below current scroll position.
         if let Some(&prev) = self.message_boundaries.iter().rev().find(|&&b| b < self.message_scroll) {
             let step = self.message_scroll - prev;
             if step > self.message_view_height {
@@ -1188,7 +1196,7 @@ impl App {
                 self.message_scroll = prev;
             }
         } else {
-            // Below all boundaries, snap to 0
+            // Below all boundaries, snap to 0 (newest at bottom).
             self.message_scroll = 0;
         }
     }
@@ -1743,5 +1751,54 @@ mod tests {
         // Scroll down again: back to 0
         app.scroll_message_down();
         assert_eq!(app.message_scroll, 0);
+    }
+
+    #[test]
+    fn test_message_scroll_large_message() {
+        let mut app = App::new_test();
+        // Boundary at 25 means a message is 25 rows tall, viewport is 10
+        app.message_boundaries = vec![25];
+        app.message_view_height = 10;
+        app.message_scroll = 0;
+
+        // Scroll up: step to boundary is 25, > viewport, so scroll by page
+        app.scroll_message_up();
+        assert_eq!(app.message_scroll, 10);
+
+        // Scroll up again: still within the large message
+        app.scroll_message_up();
+        assert_eq!(app.message_scroll, 20);
+
+        // Scroll up again: now step to 25 is only 5, <= viewport, so snap
+        app.scroll_message_up();
+        assert_eq!(app.message_scroll, 25);
+    }
+
+    #[test]
+    fn test_message_scroll_no_boundaries() {
+        let mut app = App::new_test();
+        // When all messages fit in viewport, no boundaries
+        app.message_boundaries = vec![];
+        app.message_view_height = 20;
+        app.message_scroll = 0;
+
+        // Scroll up does nothing (no boundary above)
+        app.scroll_message_up();
+        assert_eq!(app.message_scroll, 0);
+    }
+
+    #[test]
+    fn test_maybe_load_more_viewport_not_full() {
+        let mut app = App::new_test();
+        app.conversations = vec![Conversation::new(1)];
+        app.selected_conversation_idx = Some(0);
+        app.message_max_scroll = 0; // viewport not full
+        app.message_view_height = 20;
+
+        // Should try to load more even though scroll is 0
+        // (load_more_messages will check has_more_messages internally)
+        app.maybe_load_more_on_scroll();
+        // Verify it didn't panic and the method ran
+        // (actual D-Bus loading won't happen in test, but the path is exercised)
     }
 }
