@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Register HEIC/HEIF decoder hooks so the image crate can decode them.
+    #[cfg(feature = "heif")]
     libheif_rs::integration::image::register_all_decoding_hooks();
 
 

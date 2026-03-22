@@ -57,6 +57,15 @@ Options:
 - `kdeconnectd` (the KDE Connect daemon)
 - KDE Connect app on your Android device, paired with your machine
 - D-Bus session bus
+- `libheif` development headers (optional, for HEIC/HEIF image support)
+  - Debian/Ubuntu: `apt install libheif-dev`
+  - Fedora: `dnf install libheif-devel`
+  - Arch: `pacman -S libheif`
+  - Nix: included in the flake
+
+Without `libheif`, the app still compiles and runs but HEIC/HEIF images
+will show a placeholder instead of being rendered inline. To build
+without HEIF support: `cargo build --no-default-features`
 
 ### From source
 
