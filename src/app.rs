@@ -559,8 +559,11 @@ impl App {
             return;
         };
 
-        // Only request the initial batch if we haven't loaded yet.
-        if conv.messages_requested > 0 {
+        // Skip if we already have messages loaded for this conversation.
+        // If a previous request was made but no messages arrived (signals lost),
+        // allow retrying by checking messages.is_empty() rather than
+        // messages_requested alone.
+        if conv.messages_requested > 0 && !conv.messages.is_empty() {
             return;
         }
 

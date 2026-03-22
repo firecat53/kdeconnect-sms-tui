@@ -6,7 +6,7 @@ use ratatui_image::StatefulImage;
 use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, Focus, ImageState};
-use super::theme;
+use super::{sanitize_for_terminal, theme};
 
 /// Maximum height (in terminal rows) for an inline image.
 const IMAGE_MAX_ROWS: u16 = 12;
@@ -134,10 +134,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         };
 
         let time = msg.timestamp_display();
+        let body = sanitize_for_terminal(&msg.body);
         let mut text_lines = vec![Line::from(vec![
             Span::styled(format!("[{}] ", time), theme::timestamp_style()),
             Span::styled(format!("{}: ", sender), style),
-            Span::raw(msg.body.clone()),
+            Span::raw(body),
         ])];
 
         // Add non-image attachment labels to text

@@ -9,8 +9,41 @@ pub mod theme;
 pub mod test_helpers;
 
 use ratatui::Frame;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::app::{App, Focus};
+
+/// Sanitize a string for terminal rendering by collapsing multi-codepoint
+/// emoji sequences (ZWJ, variation selectors) into simpler forms that
+/// `unicode-width` measures correctly.
+///
+/// Without this, ratatui's internal width calculation (based on `unicode-width`)
+/// disagrees with the terminal's actual rendering for ZWJ emoji like 🤷‍♂️,
+/// which causes buffer misalignment and breaks box borders.
+pub(crate) fn sanitize_for_terminal(s: &str) -> String {
+    let mut result = String::new();
+    for grapheme in s.graphemes(true) {
+        if grapheme.contains('\u{200D}') {
+            // ZWJ sequence (e.g. 🤷‍♂️) — keep only the base emoji.
+            // Terminal renders the whole sequence as 2 columns, but
+            // unicode-width sums all codepoint widths (> 2).
+            if let Some(ch) = grapheme.chars().next() {
+                result.push(ch);
+            }
+        } else if grapheme.contains('\u{FE0F}') {
+            // VS16 (emoji presentation) — strip it so unicode-width
+            // sees the base character only.
+            for ch in grapheme.chars() {
+                if ch != '\u{FE0F}' {
+                    result.push(ch);
+                }
+            }
+        } else {
+            result.push_str(grapheme);
+        }
+    }
+    result
+}
 
 /// Render the full application UI.
 pub fn draw(f: &mut Frame, app: &mut App) {

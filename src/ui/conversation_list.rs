@@ -6,7 +6,7 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, Focus, LoadingState};
-use super::theme;
+use super::{sanitize_for_terminal, theme};
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let title = match app.loading {
@@ -90,19 +90,20 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 .map(|m| format_timestamp(m.date))
                 .unwrap_or_default();
 
-            // Preview text — truncate by display width to handle wide chars
-            // (emoji, CJK) that occupy 2 columns each.
-            let preview = conv.preview_text();
+            // Preview text — sanitize emoji sequences then truncate by
+            // display width to handle wide chars (emoji, CJK).
+            let preview = sanitize_for_terminal(conv.preview_text());
             let max_width = area.width.saturating_sub(4) as usize;
-            let preview_truncated = truncate_to_width(preview, max_width);
+            let preview_truncated = truncate_to_width(&preview, max_width);
 
             let unread_marker = if is_unread { " *" } else { "" };
 
             // Truncate the name line too (name + marker + time could overflow)
+            let name_sanitized = sanitize_for_terminal(&name_display);
             let time_width = time_str.chars().map(safe_char_width).sum::<usize>();
             let marker_width = unread_marker.len(); // ASCII only
             let name_budget = max_width.saturating_sub(time_width + marker_width + 1);
-            let name_truncated = truncate_to_width(&name_display, name_budget);
+            let name_truncated = truncate_to_width(&name_sanitized, name_budget);
 
             ListItem::new(vec![
                 Line::from(vec![
@@ -400,5 +401,24 @@ mod tests {
         let truncated = truncate_to_width(s, 20);
         assert!(!truncated.contains('\n'));
         assert!(truncated.contains("Hello world"));
+    }
+
+    #[test]
+    fn test_sanitize_zjw_emoji() {
+        // 🤷‍♂️ = U+1F937 U+200D U+2642 U+FE0F — should collapse to base emoji
+        let zjw = "\u{1F937}\u{200D}\u{2642}\u{FE0F}";
+        let sanitized = sanitize_for_terminal(zjw);
+        assert_eq!(sanitized, "\u{1F937}");
+
+        // VS16 only (e.g. ❤️ = U+2764 U+FE0F) — strip VS16
+        let vs16 = "\u{2764}\u{FE0F}";
+        let sanitized = sanitize_for_terminal(vs16);
+        assert_eq!(sanitized, "\u{2764}");
+
+        // Plain text is unchanged
+        assert_eq!(sanitize_for_terminal("Hello world"), "Hello world");
+
+        // Simple emoji (no ZWJ/VS16) is unchanged
+        assert_eq!(sanitize_for_terminal("\u{1F600}"), "\u{1F600}");
     }
 }
