@@ -761,7 +761,11 @@ impl App {
                         && !self.image_states.contains_key(&att.unique_identifier)
                     {
                         if let Some(ref path) = att.cached_path {
-                            match image::open(path) {
+                            let load_result = image::ImageReader::open(path)
+                                .and_then(|r| r.with_guessed_format())
+                                .map_err(image::ImageError::IoError)
+                                .and_then(|r| r.decode());
+                            match load_result {
                                 Ok(dyn_img) => {
                                     let protocol = picker.new_resize_protocol(dyn_img);
                                     self.image_states.insert(
@@ -770,6 +774,11 @@ impl App {
                                     );
                                 }
                                 Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to decode cached image {:?}: {}",
+                                        path,
+                                        e
+                                    );
                                     self.image_states.insert(
                                         att.unique_identifier.clone(),
                                         ImageState::Failed(e.to_string()),
