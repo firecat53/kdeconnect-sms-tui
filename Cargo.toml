@@ -10,6 +10,7 @@ ratatui = "0.30"
 crossterm = { version = "0.29", features = ["event-stream"] }
 ratatui-image = { version = "10", default-features = false, features = ["crossterm", "image-defaults", "serde", "tokio"] }
 image = "0.25"
+libheif-rs = { version = "2", features = ["embedded-libheif", "image"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

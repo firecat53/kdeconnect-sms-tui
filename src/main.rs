@@ -31,6 +31,10 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
     let args = Args::parse();
 
+    // Register HEIC/HEIF decoder hooks so the image crate can decode them.
+    libheif_rs::integration::image::register_all_decoding_hooks();
+
+
     // Install a panic hook that restores the terminal before printing
     // the panic message, so the user doesn't end up with an unusable
     // terminal.
