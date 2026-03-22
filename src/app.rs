@@ -288,6 +288,33 @@ impl App {
         self.load_conversations().await;
     }
 
+    /// If we have a selected device but aren't connected yet (e.g. kdeconnectd
+    /// was still starting when the app launched), periodically retry.
+    async fn retry_connection_if_needed(
+        &mut self,
+        signal_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    ) {
+        // Only try every 8 ticks (2 seconds)
+        if self.tick_count % 8 != 0 {
+            return;
+        }
+        // Already connected — nothing to do
+        if self.conversations_client.is_some() {
+            return;
+        }
+        // No device selected — nothing to connect to
+        if self.selected_device_idx.is_none() {
+            // Try to discover devices first
+            self.refresh_devices().await;
+            if self.selected_device_idx.is_none() {
+                return;
+            }
+        }
+        tracing::debug!("Retrying device connection...");
+        self.refresh_devices().await;
+        self.connect_to_device(signal_tx).await;
+    }
+
     /// Load conversations from the currently connected device.
     async fn load_conversations(&mut self) {
         let Some(ref client) = self.conversations_client else {
@@ -477,6 +504,7 @@ impl App {
             AppEvent::Resize(_, _) => {}
             AppEvent::Tick => {
                 self.tick_count = self.tick_count.wrapping_add(1);
+                self.retry_connection_if_needed(signal_tx.clone()).await;
                 self.retry_message_loading_if_needed().await;
             }
             AppEvent::DevicesChanged => {
@@ -498,6 +526,18 @@ impl App {
             AppEvent::ConversationLoaded(thread_id, message_count) => {
                 // Record the total message count so pagination knows when to stop.
                 if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
+                    // When kdeconnectd discovers more messages (total increases),
+                    // reset messages_requested to what we actually have so that
+                    // has_more_messages() returns true and load_more_messages()
+                    // requests the right range.  Without this, messages_requested
+                    // can exceed the old total (e.g. requested=50, old total=25)
+                    // and stay above the new total (e.g. 49), blocking loading.
+                    let old_total = conv.total_messages.unwrap_or(0);
+                    if message_count > old_total
+                        && (conv.messages_requested as usize) > conv.messages.len()
+                    {
+                        conv.messages_requested = conv.messages.len() as i32;
+                    }
                     conv.total_messages = Some(message_count);
                     conv.loading_more_messages = false;
                 }
