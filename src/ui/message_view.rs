@@ -11,6 +11,9 @@ use super::{sanitize_for_terminal, theme};
 /// Maximum height (in terminal rows) for an inline image.
 const IMAGE_MAX_ROWS: u16 = 12;
 
+/// Braille spinner frames (each frame is one character).
+const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 /// A render element in the message view: either text lines or an image.
 enum RenderItem {
     Text(Vec<Line<'static>>),
@@ -119,6 +122,15 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     // Build render items from messages
     let mut items: Vec<RenderItem> = Vec::new();
 
+    // Show animated spinner at the top when loading older messages
+    if conv.loading_more_messages {
+        let frame = SPINNER_FRAMES[app.tick_count as usize % SPINNER_FRAMES.len()];
+        items.push(RenderItem::Text(vec![Line::from(Span::styled(
+            format!(" {} Loading older messages...", frame),
+            theme::help_style(),
+        ))]));
+    }
+
     for msg in &conv.messages {
         let sender = if msg.is_incoming() {
             let addr = msg.addresses.first().map(|a| a.address.as_str()).unwrap_or("?");
@@ -206,9 +218,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Compute per-message heights by grouping render items back to messages.
     // Each message produces: 1 Text item + N image/placeholder items (one per image attachment).
+    // Skip the spinner item at the front if present.
     let mut msg_heights: Vec<u16> = Vec::with_capacity(conv.messages.len());
     {
-        let mut item_idx = 0usize;
+        let mut item_idx = if conv.loading_more_messages { 1usize } else { 0usize };
         for msg in &conv.messages {
             let mut h: u16 = 0;
             // Text item
@@ -404,6 +417,7 @@ mod tests {
             display_name: None,
             messages_requested: 0,
             total_messages: None,
+            loading_more_messages: false,
         });
         app.selected_conversation_idx = Some(0);
 
@@ -433,6 +447,7 @@ mod tests {
             display_name: None,
             messages_requested: 0,
             total_messages: None,
+            loading_more_messages: false,
         });
         app.selected_conversation_idx = Some(0);
 
@@ -461,6 +476,7 @@ mod tests {
             display_name: None,
             messages_requested: 0,
             total_messages: None,
+            loading_more_messages: false,
         });
         app.selected_conversation_idx = Some(0);
 
@@ -508,6 +524,7 @@ mod tests {
             display_name: None,
             messages_requested: 0,
             total_messages: None,
+            loading_more_messages: false,
         });
         app.selected_conversation_idx = Some(0);
 

@@ -91,7 +91,7 @@ pub struct App {
     /// Attachment unique_identifiers that have been requested (to avoid duplicates)
     pending_attachments: HashSet<String>,
     /// Tick counter for periodic retry of message loading (250ms per tick).
-    tick_count: u32,
+    pub tick_count: u32,
 }
 
 impl App {
@@ -431,7 +431,8 @@ impl App {
             // Wait for either terminal or D-Bus signal events
             tokio::select! {
                 Some(event) = term_events.recv() => {
-                    needs_redraw = !matches!(&event, AppEvent::Tick);
+                    needs_redraw = !matches!(&event, AppEvent::Tick)
+                        || self.is_loading_more_messages();
                     self.handle_event(event, signal_tx.clone()).await;
                 }
                 Some(event) = signal_events.recv() => {
@@ -484,6 +485,7 @@ impl App {
                 // Record the total message count so pagination knows when to stop.
                 if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
                     conv.total_messages = Some(message_count);
+                    conv.loading_more_messages = false;
                 }
                 // Phone finished sending data — only fetch cached results.
                 // Do NOT call request_all_conversation_threads() here or it
@@ -612,6 +614,7 @@ impl App {
         let start = conv.messages_requested;
         let end = start + Self::MESSAGE_PAGE_SIZE;
         conv.messages_requested = end;
+        conv.loading_more_messages = true;
 
         let connection = client.connection().clone();
         let device_id = client.device_id().to_owned();
@@ -689,6 +692,13 @@ impl App {
         if self.message_scroll >= self.message_max_scroll.saturating_sub(threshold) {
             self.load_more_messages();
         }
+    }
+
+    /// Whether the selected conversation is currently loading older messages.
+    fn is_loading_more_messages(&self) -> bool {
+        self.selected_conversation_idx
+            .and_then(|i| self.conversations.get(i))
+            .is_some_and(|c| c.loading_more_messages)
     }
 
     /// Handle a conversation being removed.

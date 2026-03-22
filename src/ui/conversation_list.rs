@@ -299,6 +299,7 @@ mod tests {
             display_name: None,
             messages_requested: 0,
             total_messages: None,
+            loading_more_messages: false,
         });
 
         let backend = TestBackend::new(40, 10);
@@ -325,6 +326,7 @@ mod tests {
             display_name: Some("Family".into()),
             messages_requested: 0,
             total_messages: None,
+            loading_more_messages: false,
         });
 
         let backend = TestBackend::new(40, 10);

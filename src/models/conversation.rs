@@ -20,6 +20,9 @@ pub struct Conversation {
     /// `None` means we don't know yet.
     #[serde(default)]
     pub total_messages: Option<u64>,
+    /// Whether a page of older messages is currently being fetched.
+    #[serde(default)]
+    pub loading_more_messages: bool,
 }
 
 impl Conversation {
@@ -32,6 +35,7 @@ impl Conversation {
             display_name: None,
             messages_requested: 0,
             total_messages: None,
+            loading_more_messages: false,
         }
     }
 
@@ -99,6 +103,7 @@ mod tests {
             display_name: None,
             messages_requested: 0,
             total_messages: None,
+            loading_more_messages: false,
         }
     }
 
