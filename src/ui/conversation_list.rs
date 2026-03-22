@@ -3,6 +3,7 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, Focus, LoadingState};
 use super::theme;
@@ -89,16 +90,11 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 .map(|m| format_timestamp(m.date))
                 .unwrap_or_default();
 
-            // Preview text — truncate on a char boundary to avoid panics
-            // with multi-byte characters (emoji, accented chars, etc.)
+            // Preview text — truncate by display width to handle wide chars
+            // (emoji, CJK) that occupy 2 columns each.
             let preview = conv.preview_text();
-            let max_chars = area.width.saturating_sub(4) as usize;
-            let preview_truncated: String = if preview.chars().count() > max_chars {
-                let truncated: String = preview.chars().take(max_chars.saturating_sub(3)).collect();
-                format!("{}...", truncated)
-            } else {
-                preview.to_string()
-            };
+            let max_width = area.width.saturating_sub(4) as usize;
+            let preview_truncated = truncate_to_width(preview, max_width);
 
             let unread_marker = if is_unread { " *" } else { "" };
 
@@ -121,6 +117,37 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let mut state = ListState::default();
     state.select(app.selected_conversation_idx);
     f.render_stateful_widget(list, area, &mut state);
+}
+
+/// Truncate a string to fit within `max_width` display columns,
+/// accounting for wide characters (emoji, CJK). Appends "..." if truncated.
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    let mut width = 0usize;
+    let mut result = String::new();
+    let ellipsis_width = 3; // "..."
+
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if width + cw > max_width {
+            // Won't fit — truncate with ellipsis if there's room
+            if max_width >= ellipsis_width {
+                // Trim back to make room for "..."
+                while result.chars().count() > 0 {
+                    let last_w = result.chars().next_back().and_then(|c| c.width()).unwrap_or(0);
+                    if width + ellipsis_width <= max_width {
+                        break;
+                    }
+                    result.pop();
+                    width -= last_w;
+                }
+                result.push_str("...");
+            }
+            return result;
+        }
+        width += cw;
+        result.push(ch);
+    }
+    result
 }
 
 /// Format a Unix millisecond timestamp into a human-readable relative time.
@@ -272,5 +299,33 @@ mod tests {
         assert_eq!(format_timestamp(now_millis - 120_000), "2m");
         assert_eq!(format_timestamp(now_millis - 7200_000), "2h");
         assert_eq!(format_timestamp(now_millis - 172800_000), "2d");
+    }
+
+    #[test]
+    fn test_truncate_to_width_ascii() {
+        assert_eq!(truncate_to_width("hello", 10), "hello");
+        assert_eq!(truncate_to_width("hello world!", 8), "hello...");
+    }
+
+    #[test]
+    fn test_truncate_to_width_emoji() {
+        // 😀 is a single codepoint, 2 columns wide
+        let s = "Which is fine \u{1F600}";
+        // "Which is fine " = 14 cols, emoji = 2, total = 16
+        assert_eq!(truncate_to_width(s, 16), s);
+        // In width 15, emoji doesn't fit, truncate
+        let truncated = truncate_to_width(s, 15);
+        assert!(!truncated.contains('\u{1F600}'));
+        assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_to_width_all_emoji() {
+        // 5 emoji × 2 cols = 10 cols
+        let s = "\u{1F600}\u{1F601}\u{1F602}\u{1F603}\u{1F604}";
+        assert_eq!(truncate_to_width(s, 10), s);
+        // Only room for 3 emoji (6 cols) + "..." (3 cols) = 9 cols in width 9
+        let truncated = truncate_to_width(s, 9);
+        assert!(truncated.ends_with("..."));
     }
 }

@@ -19,7 +19,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // device bar + help line
+            Constraint::Length(1), // device bar
             Constraint::Min(1),   // main content
         ])
         .split(f.area());

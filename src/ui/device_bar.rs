@@ -1,64 +1,62 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use super::theme;
 
+const HELP_TEXT: &str = "Tab:pane  j/k:nav  J/K:page  i:compose  d:devices  r:refresh  q:quit";
+
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
-    // Split into two rows: device info (1 line) and help bar (1 line)
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // device line
-            Constraint::Length(1), // help line
-        ])
-        .split(area);
+    let width = area.width as usize;
 
-    // Device line
-    let device_line = if app.devices.is_empty() {
-        Line::from(vec![
-            Span::styled(" No devices found", theme::status_unavailable()),
-            Span::styled(
-                " -- is kdeconnectd running?",
-                theme::help_style(),
-            ),
-        ])
-    } else {
-        let mut spans = Vec::new();
-        spans.push(Span::raw(" "));
+    // Build the left side: device name + optional status
+    let mut left_spans: Vec<Span> = Vec::new();
+    left_spans.push(Span::raw(" "));
 
-        if let Some(device) = app.selected_device() {
-            let style = if device.is_available() {
-                theme::status_available().add_modifier(Modifier::BOLD)
-            } else {
-                theme::status_unavailable().add_modifier(Modifier::BOLD)
-            };
-            spans.push(Span::styled(&device.name, style));
+    if app.devices.is_empty() {
+        left_spans.push(Span::styled("No devices found", theme::status_unavailable()));
+        left_spans.push(Span::styled(
+            " -- is kdeconnectd running?",
+            theme::help_style(),
+        ));
+    } else if let Some(device) = app.selected_device() {
+        let style = if device.is_available() {
+            theme::status_available().add_modifier(Modifier::BOLD)
         } else {
-            spans.push(Span::styled("No device selected", theme::status_unavailable()));
-        }
+            theme::status_unavailable().add_modifier(Modifier::BOLD)
+        };
+        left_spans.push(Span::styled(&device.name, style));
 
         if let Some(ref status) = app.status_message {
-            spans.push(Span::styled(
+            left_spans.push(Span::styled(
                 format!("  [{}]", status),
                 theme::help_style(),
             ));
         }
+    } else {
+        left_spans.push(Span::styled("No device selected", theme::status_unavailable()));
+    }
 
-        Line::from(spans)
-    };
+    // Calculate left side width
+    let left_width: usize = left_spans.iter().map(|s| s.content.width()).sum();
+    let help_width = HELP_TEXT.width();
 
-    f.render_widget(Paragraph::new(device_line), chunks[0]);
+    // If both fit, add spacing + right-justified help text
+    let gap = width.saturating_sub(left_width + help_width);
+    if gap >= 2 {
+        left_spans.push(Span::raw(" ".repeat(gap)));
+        left_spans.push(Span::styled(HELP_TEXT, theme::help_style()));
+    } else if left_width + 2 + help_width <= width {
+        left_spans.push(Span::raw("  "));
+        left_spans.push(Span::styled(HELP_TEXT, theme::help_style()));
+    }
+    // If combined is too wide, just show device info (help omitted)
 
-    // Help line
-    let help = Line::from(Span::styled(
-        " Tab:pane  j/k:nav  J/K:page  i:compose  d:devices  r:refresh  q:quit",
-        theme::help_style(),
-    ));
-    f.render_widget(Paragraph::new(help), chunks[1]);
+    f.render_widget(Paragraph::new(Line::from(left_spans)), area);
 }
 
 #[cfg(test)]
@@ -72,7 +70,7 @@ mod tests {
     #[test]
     fn test_device_bar_renders_no_devices() {
         let app = App::new_test();
-        let backend = TestBackend::new(60, 3);
+        let backend = TestBackend::new(60, 1);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -96,7 +94,7 @@ mod tests {
         }];
         app.selected_device_idx = Some(0);
 
-        let backend = TestBackend::new(80, 3);
+        let backend = TestBackend::new(100, 1);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -107,6 +105,7 @@ mod tests {
 
         let content = crate::ui::test_helpers::buffer_to_string(terminal.backend().buffer());
         assert!(content.contains("Pixel 8"));
+        assert!(content.contains("Tab:pane"));
     }
 
     #[test]
@@ -121,7 +120,7 @@ mod tests {
         app.selected_device_idx = Some(0);
         app.status_message = Some("5 conversations loaded".into());
 
-        let backend = TestBackend::new(80, 3);
+        let backend = TestBackend::new(100, 1);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -135,9 +134,17 @@ mod tests {
     }
 
     #[test]
-    fn test_device_bar_shows_help_line() {
-        let app = App::new_test();
-        let backend = TestBackend::new(80, 3);
+    fn test_device_bar_help_on_same_line() {
+        let mut app = App::new_test();
+        app.devices = vec![Device {
+            id: "test".into(),
+            name: "Phone".into(),
+            reachable: true,
+            paired: true,
+        }];
+        app.selected_device_idx = Some(0);
+
+        let backend = TestBackend::new(100, 1);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -147,7 +154,36 @@ mod tests {
             .unwrap();
 
         let content = crate::ui::test_helpers::buffer_to_string(terminal.backend().buffer());
-        assert!(content.contains("Tab:pane"));
+        // Both device name and help text on the same line
+        assert!(content.contains("Phone"));
         assert!(content.contains("d:devices"));
+    }
+
+    #[test]
+    fn test_device_bar_narrow_hides_help() {
+        let mut app = App::new_test();
+        app.devices = vec![Device {
+            id: "test".into(),
+            name: "My Very Long Device Name".into(),
+            reachable: true,
+            paired: true,
+        }];
+        app.selected_device_idx = Some(0);
+        app.status_message = Some("65 conversations loaded".into());
+
+        // Very narrow terminal — help text won't fit
+        let backend = TestBackend::new(40, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                draw(f, &app, f.area());
+            })
+            .unwrap();
+
+        let content = crate::ui::test_helpers::buffer_to_string(terminal.backend().buffer());
+        assert!(content.contains("My Very Long Device Name"));
+        // Help text should be omitted when it doesn't fit
+        assert!(!content.contains("Tab:pane"));
     }
 }
