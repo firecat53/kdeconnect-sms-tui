@@ -11,16 +11,17 @@ const KDECONNECT_SERVICE: &str = "org.kde.kdeconnect";
 const CONVERSATIONS_INTERFACE: &str = "org.kde.kdeconnect.device.conversations";
 
 /// Spawn a task that listens for conversation D-Bus signals and forwards them as AppEvents.
+/// Returns a JoinHandle that can be aborted to stop the listener.
 pub fn spawn_signal_listener(
     connection: Connection,
     device_id: String,
     tx: mpsc::UnboundedSender<AppEvent>,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if let Err(e) = listen_signals(connection, &device_id, tx).await {
             warn!("Signal listener stopped: {}", e);
         }
-    });
+    })
 }
 
 async fn listen_signals(

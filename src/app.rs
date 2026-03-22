@@ -82,6 +82,8 @@ pub struct App {
     conversations_client: Option<ConversationsClient>,
     /// Sender for injecting D-Bus signal events
     signal_tx: Option<tokio::sync::mpsc::UnboundedSender<AppEvent>>,
+    /// Handle to cancel the current signal listener when switching devices.
+    signal_listener_handle: Option<tokio::task::JoinHandle<()>>,
     /// Terminal image protocol picker (None if detection failed)
     pub picker: Option<Picker>,
     /// Image states keyed by attachment unique_identifier
@@ -134,6 +136,7 @@ impl App {
             daemon,
             conversations_client: None,
             signal_tx: None,
+            signal_listener_handle: None,
             picker: None,
             image_states: HashMap::new(),
             pending_attachments: HashSet::new(),
@@ -194,6 +197,7 @@ impl App {
             daemon: None,
             conversations_client: None,
             signal_tx: None,
+            signal_listener_handle: None,
             picker: None,
             image_states: HashMap::new(),
             pending_attachments: HashSet::new(),
@@ -238,12 +242,20 @@ impl App {
             device.id.clone(),
         );
 
+        // Cancel previous signal listener (if any) before starting a new one.
+        // Without this, switching devices or reconnecting accumulates listeners
+        // that forward duplicate signals.
+        if let Some(handle) = self.signal_listener_handle.take() {
+            handle.abort();
+        }
+
         // Start signal listener for this device
-        signals::spawn_signal_listener(
+        let handle = signals::spawn_signal_listener(
             daemon.connection().clone(),
             device.id.clone(),
             signal_tx,
         );
+        self.signal_listener_handle = Some(handle);
 
         self.conversations_client = Some(client);
         self.status_message = Some(format!("Connected to {}", device.name));
