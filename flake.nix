@@ -25,6 +25,7 @@
         nativeBuildInputs = with pkgs; [
           rustToolchain
           pkg-config
+          cmake
         ];
 
         buildInputs = with pkgs; [
