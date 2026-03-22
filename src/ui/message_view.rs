@@ -226,32 +226,35 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
+    // message_scroll is an offset FROM the bottom (0 = newest visible)
+    let max_scroll = total_height.saturating_sub(inner_height);
+    app.message_scroll = app.message_scroll.min(max_scroll);
+    app.message_max_scroll = max_scroll;
+
     // Build message_boundaries: sorted ascending scroll offsets that snap
-    // the bottom of each message to the bottom of the viewport.
+    // to message-by-message positions.
     //
-    // message_scroll = 0 means newest message's bottom is at viewport bottom.
-    // Walking from newest (last) to oldest (first), accumulate heights.
-    // After accumulating message N, the scroll offset that puts message N's
-    // bottom at the viewport bottom is: cum - inner_height (only if > 0).
+    // message_scroll is an offset FROM the bottom: 0 = newest visible,
+    // increasing values scroll toward older messages.  Each boundary is the
+    // cumulative height of the N newest messages — scrolling to that value
+    // hides those N messages below the viewport.
     {
         let mut scroll_boundaries: Vec<u16> = Vec::new();
         let mut cum: u16 = 0;
         for &mh in msg_heights.iter().rev() {
             cum += mh;
-            let offset = cum.saturating_sub(inner_height);
-            if offset > 0 && !scroll_boundaries.last().is_some_and(|&last| last == offset) {
-                scroll_boundaries.push(offset);
+            if cum > 0 && cum <= max_scroll {
+                scroll_boundaries.push(cum);
             }
         }
-        scroll_boundaries.sort();
+        // Ensure max_scroll is reachable as the final boundary.
+        if max_scroll > 0 && scroll_boundaries.last() != Some(&max_scroll) {
+            scroll_boundaries.push(max_scroll);
+        }
+        // Already sorted (cum is monotonically increasing), but dedup for safety.
         scroll_boundaries.dedup();
         app.message_boundaries = scroll_boundaries;
     }
-
-    // message_scroll is an offset FROM the bottom (0 = newest visible)
-    let max_scroll = total_height.saturating_sub(inner_height);
-    app.message_scroll = app.message_scroll.min(max_scroll);
-    app.message_max_scroll = max_scroll;
 
     // Compute the pixel offset for rendering.
     // When content is shorter than viewport, bottom-align it.
@@ -522,6 +525,19 @@ mod tests {
         // At minimum, message_max_scroll should reflect that content overflows.
         assert!(app.message_max_scroll > 0 || app.message_boundaries.is_empty(),
             "scroll state should be coherent");
+
+        // Boundaries should be cumulative heights from the newest message.
+        // Each boundary hides N messages below the viewport.
+        if !app.message_boundaries.is_empty() {
+            // Boundaries must be sorted ascending
+            for w in app.message_boundaries.windows(2) {
+                assert!(w[0] < w[1], "boundaries must be sorted: {:?}", app.message_boundaries);
+            }
+            // First boundary > 0 (hides at least the newest message)
+            assert!(app.message_boundaries[0] > 0);
+            // Last boundary <= max_scroll
+            assert!(*app.message_boundaries.last().unwrap() <= app.message_max_scroll);
+        }
     }
 
     #[test]

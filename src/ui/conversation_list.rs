@@ -3,7 +3,7 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, Focus, LoadingState};
 use super::theme;
@@ -98,9 +98,15 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
             let unread_marker = if is_unread { " *" } else { "" };
 
+            // Truncate the name line too (name + marker + time could overflow)
+            let time_width = time_str.chars().map(safe_char_width).sum::<usize>();
+            let marker_width = unread_marker.len(); // ASCII only
+            let name_budget = max_width.saturating_sub(time_width + marker_width + 1);
+            let name_truncated = truncate_to_width(&name_display, name_budget);
+
             ListItem::new(vec![
                 Line::from(vec![
-                    Span::styled(name_display, name_style),
+                    Span::styled(name_truncated, name_style),
                     Span::styled(unread_marker.to_string(), theme::status_available()),
                     Span::raw(" "),
                     Span::styled(time_str, theme::timestamp_style()),
@@ -119,21 +125,66 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
+/// Terminal-safe character width.  `unicode-width` follows UAX #11 which
+/// classifies many emoji as Neutral (width 1), but modern terminals render
+/// them as 2 columns.  This function bumps such characters to width 2.
+fn safe_char_width(ch: char) -> usize {
+    let w = ch.width().unwrap_or(0);
+    if w == 0 {
+        return 0;
+    }
+    // Characters that unicode-width reports as 1 but terminals render as 2:
+    // emoji and symbol characters in ranges above U+2000.  We intentionally
+    // exclude General Punctuation (U+2000–U+206F) and similar text-like
+    // ranges, targeting symbol/emoji blocks.
+    if w == 1 {
+        let cp = ch as u32;
+        if matches!(cp,
+            0x00A9 | 0x00AE |                     // ©, ®
+            0x203C | 0x2049 |                     // ‼, ⁉
+            0x2122 | 0x2139 |                     // ™, ℹ
+            0x2194..=0x2199 |                     // ↔–↙
+            0x21A9..=0x21AA |                     // ↩, ↪
+            0x231A..=0x231B |                     // ⌚, ⌛
+            0x2328 | 0x23CF |                     // ⌨, ⏏
+            0x23E9..=0x23F3 |                     // ⏩–⏳
+            0x23F8..=0x23FA |                     // ⏸–⏺
+            0x25AA..=0x25AB |                     // ▪, ▫
+            0x25B6 | 0x25C0 |                     // ▶, ◀
+            0x25FB..=0x25FE |                     // ◻–◾
+            0x2600..=0x27BF |                     // ☀–➿ (Misc Symbols, Dingbats)
+            0x2934..=0x2935 |                     // ⤴, ⤵
+            0x2B05..=0x2B07 |                     // ⬅–⬇
+            0x2B1B..=0x2B1C |                     // ⬛, ⬜
+            0x2B50 | 0x2B55 |                     // ⭐, ⭕
+            0x3030 | 0x303D | 0x3297 | 0x3299 |  // 〰, 〽, ㊗, ㊙
+            0xFE0F                                 // Variation Selector 16 (emoji pres.)
+        ) {
+            return 2;
+        }
+    }
+    w
+}
+
 /// Truncate a string to fit within `max_width` display columns,
 /// accounting for wide characters (emoji, CJK). Appends "..." if truncated.
+/// Strips newlines and control characters from the output.
 fn truncate_to_width(s: &str, max_width: usize) -> String {
     let mut width = 0usize;
     let mut result = String::new();
     let ellipsis_width = 3; // "..."
 
     for ch in s.chars() {
-        let cw = ch.width().unwrap_or(0);
+        // Replace newlines/control chars with space for single-line preview.
+        let ch = if ch.is_control() { ' ' } else { ch };
+
+        let cw = safe_char_width(ch);
         if width + cw > max_width {
             // Won't fit — truncate with ellipsis if there's room
             if max_width >= ellipsis_width {
                 // Trim back to make room for "..."
-                while result.chars().count() > 0 {
-                    let last_w = result.chars().next_back().and_then(|c| c.width()).unwrap_or(0);
+                while !result.is_empty() {
+                    let last_w = result.chars().next_back().map(safe_char_width).unwrap_or(0);
                     if width + ellipsis_width <= max_width {
                         break;
                     }
@@ -327,5 +378,27 @@ mod tests {
         // Only room for 3 emoji (6 cols) + "..." (3 cols) = 9 cols in width 9
         let truncated = truncate_to_width(s, 9);
         assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_safe_char_width_emoji_symbols() {
+        // These emoji symbols are often width 1 in unicode-width but 2 in terminals.
+        // safe_char_width should return 2 for them.
+        assert_eq!(safe_char_width('❤'), 2); // U+2764 (Heavy Black Heart)
+        assert_eq!(safe_char_width('✅'), 2); // U+2705
+        assert_eq!(safe_char_width('⭐'), 2); // U+2B50
+        assert_eq!(safe_char_width('☀'), 2);  // U+2600
+        // Regular ASCII should be 1
+        assert_eq!(safe_char_width('A'), 1);
+        assert_eq!(safe_char_width(' '), 1);
+    }
+
+    #[test]
+    fn test_truncate_newlines() {
+        // Newlines in preview text should be replaced with spaces
+        let s = "Hello\nworld";
+        let truncated = truncate_to_width(s, 20);
+        assert!(!truncated.contains('\n'));
+        assert!(truncated.contains("Hello world"));
     }
 }

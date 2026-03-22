@@ -11,29 +11,19 @@ const KDECONNECT_SERVICE: &str = "org.kde.kdeconnect";
 const CONVERSATIONS_INTERFACE: &str = "org.kde.kdeconnect.device.conversations";
 
 /// Spawn a task that listens for conversation D-Bus signals and forwards them as AppEvents.
+/// The D-Bus match rule is registered **before** returning so that no signals are lost
+/// between spawning the listener and starting to load conversations.
 /// Returns a JoinHandle that can be aborted to stop the listener.
-pub fn spawn_signal_listener(
+pub async fn spawn_signal_listener(
     connection: Connection,
     device_id: String,
     tx: mpsc::UnboundedSender<AppEvent>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        if let Err(e) = listen_signals(connection, &device_id, tx).await {
-            warn!("Signal listener stopped: {}", e);
-        }
-    })
-}
-
-async fn listen_signals(
-    connection: Connection,
-    device_id: &str,
-    tx: mpsc::UnboundedSender<AppEvent>,
-) -> color_eyre::Result<()> {
-    use futures_lite::StreamExt;
-
+) -> color_eyre::Result<tokio::task::JoinHandle<()>> {
     let device_path = format!("/modules/kdeconnect/devices/{}", device_id);
 
-    // Subscribe to all signals on the conversations interface for this device
+    // Subscribe to all signals on the conversations interface for this device.
+    // This MUST complete before any conversation requests are made, otherwise
+    // the reply signals will be missed (race condition).
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .sender(KDECONNECT_SERVICE)?
@@ -41,9 +31,22 @@ async fn listen_signals(
         .interface(CONVERSATIONS_INTERFACE)?
         .build();
 
-    let mut stream = zbus::MessageStream::for_match_rule(rule, &connection, None).await?;
+    let stream = zbus::MessageStream::for_match_rule(rule, &connection, None).await?;
 
     debug!("Listening for conversation signals on {}", device_path);
+
+    Ok(tokio::spawn(async move {
+        if let Err(e) = listen_signals(stream, tx).await {
+            warn!("Signal listener stopped: {}", e);
+        }
+    }))
+}
+
+async fn listen_signals(
+    mut stream: zbus::MessageStream,
+    tx: mpsc::UnboundedSender<AppEvent>,
+) -> color_eyre::Result<()> {
+    use futures_lite::StreamExt;
 
     while let Some(msg) = stream.next().await {
         let msg = match msg {
@@ -115,6 +118,16 @@ async fn listen_signals(
 /// Parse a signal body that contains a QDBusVariant wrapping a message map.
 fn parse_variant_signal_body(body: Body) -> Option<crate::models::message::Message> {
     // The signal sends a QDBusVariant (wrapped variant)
-    let val: OwnedValue = body.deserialize().ok()?;
-    parse_signal_message(&val)
+    let val: OwnedValue = match body.deserialize() {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("Failed to deserialize signal body: {}", e);
+            return None;
+        }
+    };
+    let msg = parse_signal_message(&val);
+    if msg.is_none() {
+        warn!("Failed to parse signal message from variant");
+    }
+    msg
 }

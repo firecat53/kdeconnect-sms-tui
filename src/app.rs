@@ -249,13 +249,22 @@ impl App {
             handle.abort();
         }
 
-        // Start signal listener for this device
-        let handle = signals::spawn_signal_listener(
+        // Start signal listener for this device.
+        // Awaiting here ensures the D-Bus match rule is registered before we
+        // request any conversations, so no reply signals are lost.
+        match signals::spawn_signal_listener(
             daemon.connection().clone(),
             device.id.clone(),
             signal_tx,
-        );
-        self.signal_listener_handle = Some(handle);
+        ).await {
+            Ok(handle) => {
+                self.signal_listener_handle = Some(handle);
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Signal listener failed: {}", e));
+                return;
+            }
+        }
 
         self.conversations_client = Some(client);
         self.status_message = Some(format!("Connected to {}", device.name));
