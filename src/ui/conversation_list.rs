@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
-use crate::app::{App, LoadingState};
+use crate::app::{App, Focus, LoadingState};
 use super::theme;
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
@@ -13,10 +13,18 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         _ => " Conversations ",
     };
 
+    let is_active = app.focus == Focus::ConversationList;
+    let border_style = if is_active {
+        theme::active_border()
+    } else {
+        theme::inactive_border()
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .title_style(theme::title_style());
+        .title_style(if is_active { theme::title_style() } else { theme::help_style() })
+        .border_style(border_style);
 
     if app.conversations.is_empty() {
         let msg = match &app.loading {

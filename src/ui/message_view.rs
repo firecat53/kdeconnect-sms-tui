@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui_image::StatefulImage;
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::{App, ImageState};
+use crate::app::{App, Focus, ImageState};
 use super::theme;
 
 /// Maximum height (in terminal rows) for an inline image.
@@ -77,10 +77,18 @@ fn wrapped_line_height(line: &Line<'_>, width: usize) -> u16 {
 }
 
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
+    let is_active = app.focus == Focus::MessageView;
+    let border_style = if is_active {
+        theme::active_border()
+    } else {
+        theme::inactive_border()
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Messages ")
-        .title_style(theme::title_style());
+        .title_style(if is_active { theme::title_style() } else { theme::help_style() })
+        .border_style(border_style);
 
     // No conversation selected
     let selected = app.selected_conversation_idx.and_then(|i| app.conversations.get(i));
@@ -191,8 +199,80 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let inner_height = inner.height;
     app.message_view_height = inner_height;
 
-    // Calculate total content height
-    let total_height: u16 = items.iter().map(|item| item.height(inner_width)).sum();
+    // Calculate total content height and message boundaries.
+    // We group render items back into per-message groups so that
+    // message-by-message scrolling snaps to message boundaries.
+    // Each message produces a Text item + optional attachment items.
+    // We track the cumulative height from the bottom for each message boundary.
+    let item_heights: Vec<u16> = items.iter().map(|item| item.height(inner_width)).collect();
+    let total_height: u16 = item_heights.iter().sum();
+
+    // Build message boundaries: cumulative height offsets from bottom.
+    // Each message in conv.messages produced a contiguous block of render items.
+    // Recompute which items belong to each message.
+    {
+        let mut boundaries = Vec::new();
+        let mut item_idx = 0;
+        let mut cumulative_from_bottom: u16 = 0;
+
+        // Walk messages in order (oldest first), items correspond 1:1 with message groups
+        for msg in &conv.messages {
+            // Each message produces: 1 Text item + N image/placeholder items (one per image attachment)
+            let mut msg_height: u16 = 0;
+
+            // Text item
+            if item_idx < item_heights.len() {
+                msg_height += item_heights[item_idx];
+                item_idx += 1;
+            }
+
+            // Image attachment items
+            let image_count = msg.attachments.iter().filter(|a| a.is_image()).count();
+            for _ in 0..image_count {
+                if item_idx < item_heights.len() {
+                    msg_height += item_heights[item_idx];
+                    item_idx += 1;
+                }
+            }
+
+            cumulative_from_bottom += msg_height;
+            // The boundary represents the scroll offset where the top of this
+            // message would be at the bottom of the viewport.
+            // We store: total_height - position_of_message_top = distance from bottom
+            boundaries.push(total_height.saturating_sub(cumulative_from_bottom.saturating_sub(msg_height)));
+        }
+
+        // Convert to offsets from bottom (for scroll comparison).
+        // boundaries[i] = how far from the bottom the top of message i is.
+        // For scrolling, we want the offset where the bottom of a message aligns
+        // with the bottom of viewport. That's: boundary - inner_height (but >= 0).
+        let mut scroll_boundaries: Vec<u16> = Vec::new();
+        let mut cum = 0u16;
+        // Walk from newest (last) to oldest (first) message
+        for msg_idx in (0..conv.messages.len()).rev() {
+            // Calculate this message's height from its render items
+            let mut msg_item_start = 0usize;
+            for i in 0..msg_idx {
+                msg_item_start += 1; // text
+                msg_item_start += conv.messages[i].attachments.iter().filter(|a| a.is_image()).count();
+            }
+            let mut msg_h = 0u16;
+            let items_for_msg = 1 + conv.messages[msg_idx].attachments.iter().filter(|a| a.is_image()).count();
+            for j in 0..items_for_msg {
+                if msg_item_start + j < item_heights.len() {
+                    msg_h += item_heights[msg_item_start + j];
+                }
+            }
+            cum += msg_h;
+            // Scroll offset to have the top of this message visible at viewport bottom
+            if cum > inner_height {
+                scroll_boundaries.push(cum.saturating_sub(inner_height));
+            }
+        }
+        scroll_boundaries.sort();
+        scroll_boundaries.dedup();
+        app.message_boundaries = scroll_boundaries;
+    }
 
     // message_scroll is an offset FROM the bottom (0 = newest visible)
     let max_scroll = total_height.saturating_sub(inner_height);

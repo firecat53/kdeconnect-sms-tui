@@ -2,6 +2,7 @@ pub mod device_bar;
 pub mod conversation_list;
 pub mod message_view;
 pub mod compose;
+pub mod device_popup;
 pub mod theme;
 
 #[cfg(test)]
@@ -9,7 +10,7 @@ pub mod test_helpers;
 
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, Focus};
 
 /// Render the full application UI.
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -18,7 +19,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // device bar
+            Constraint::Length(2), // device bar + help line
             Constraint::Min(1),   // main content
         ])
         .split(f.area());
@@ -47,4 +48,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     message_view::draw(f, app, right_chunks[0]);
     compose::draw(f, app, right_chunks[1]);
+
+    // Device popup overlay (rendered last, on top)
+    if app.focus == Focus::DevicePopup {
+        device_popup::draw(f, app);
+    }
 }

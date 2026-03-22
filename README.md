@@ -24,16 +24,22 @@ Options:
 
 ### Keybindings
 
-**Conversation list** (default focus):
+`Tab` switches focus between the **conversations** and **messages** panels.
+The active panel is highlighted with a distinct border color. Draft messages
+are saved per-conversation when you switch away.
+
+**Navigation** (conversations or messages panel):
 
 | Key | Action |
 |-----|--------|
-| `j` / `Down` | Next conversation |
-| `k` / `Up` | Previous conversation |
-| `Enter` / `i` | Open conversation / focus compose |
-| `Tab` | Cycle connected device |
+| `j` / `Down` | Next item (conversation or message) |
+| `k` / `Up` | Previous item |
+| `J` / `K` | Page down / page up |
+| `PageDown` / `PageUp` | Page down / page up |
+| `Tab` | Switch focus between panels |
+| `Enter` / `i` | Focus compose input |
+| `d` | Open device selector |
 | `r` | Refresh conversations / reconnect |
-| `PageUp` / `PageDown` | Scroll messages |
 | `q` | Quit |
 
 **Compose** (after pressing Enter/i):
@@ -42,10 +48,21 @@ Options:
 |-----|--------|
 | `Enter` | Send message |
 | `Shift+Enter` / `Alt+Enter` | Newline |
-| `Esc` | Back to conversation list |
-| `Up` / `Down` | Scroll messages (1 line) |
-| `PageUp` / `PageDown` | Scroll messages (1 page) |
+| `Esc` | Back to previous panel |
 | `Left` / `Right` / `Home` / `End` | Cursor movement |
+
+**Device selector** (after pressing d):
+
+| Key | Action |
+|-----|--------|
+| `j` / `Down` | Next device |
+| `k` / `Up` | Previous device |
+| `Enter` | Select device |
+| `Esc` / `d` | Close |
+
+Message scrolling moves message-by-message, keeping the bottom of the
+current message aligned to the viewport bottom. Messages taller than the
+viewport scroll line-by-line within the message.
 
 `Ctrl+C` quits from any screen.
 
@@ -108,7 +125,8 @@ Contact names are read from KDE Connect's synced vCards at `~/.local/share/kpeop
 - Inline image display (Kitty, Sixel, iTerm2, halfblocks)
 - Contact name resolution from synced vCards
 - Group conversation support
-- Multiple device switching
+- Multiple device switching with popup selector
+- Per-conversation draft messages
 
 ## License
 

@@ -35,3 +35,11 @@ pub fn timestamp_style() -> Style {
 pub fn help_style() -> Style {
     Style::default().fg(Color::DarkGray)
 }
+
+pub fn active_border() -> Style {
+    Style::default().fg(Color::Cyan)
+}
+
+pub fn inactive_border() -> Style {
+    Style::default().fg(Color::DarkGray)
+}

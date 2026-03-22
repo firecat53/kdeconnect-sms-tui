@@ -12,19 +12,19 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let title = if is_focused {
         " Compose (Esc: back, Enter: send) "
     } else {
-        " Compose (Enter/i: focus) "
+        " Compose "
     };
 
     let border_style = if is_focused {
-        theme::title_style()
+        theme::active_border()
     } else {
-        theme::help_style()
+        theme::inactive_border()
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .title_style(border_style)
+        .title_style(if is_focused { theme::title_style() } else { theme::help_style() })
         .border_style(border_style);
 
     if app.compose_input.is_empty() && !is_focused {

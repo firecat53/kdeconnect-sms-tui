@@ -1,20 +1,26 @@
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::app::App;
 use super::theme;
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" KDE Connect SMS ");
+    // Split into two rows: device info (1 line) and help bar (1 line)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // device line
+            Constraint::Length(1), // help line
+        ])
+        .split(area);
 
-    let content = if app.devices.is_empty() {
+    // Device line
+    let device_line = if app.devices.is_empty() {
         Line::from(vec![
-            Span::styled("No devices found", theme::status_unavailable()),
+            Span::styled(" No devices found", theme::status_unavailable()),
             Span::styled(
                 " -- is kdeconnectd running?",
                 theme::help_style(),
@@ -22,42 +28,22 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         ])
     } else {
         let mut spans = Vec::new();
+        spans.push(Span::raw(" "));
 
-        for (i, device) in app.devices.iter().enumerate() {
-            let is_selected = app.selected_device_idx == Some(i);
-
-            let style = if is_selected {
-                if device.is_available() {
-                    theme::status_available().add_modifier(Modifier::BOLD)
-                } else {
-                    theme::status_unavailable().add_modifier(Modifier::BOLD)
-                }
-            } else if device.is_available() {
-                theme::status_available()
+        if let Some(device) = app.selected_device() {
+            let style = if device.is_available() {
+                theme::status_available().add_modifier(Modifier::BOLD)
             } else {
-                theme::status_unavailable()
+                theme::status_unavailable().add_modifier(Modifier::BOLD)
             };
-
-            if i > 0 {
-                spans.push(Span::raw(" | "));
-            }
-
-            let prefix = if is_selected { "> " } else { "  " };
-            spans.push(Span::styled(
-                format!("{}{}", prefix, device.name),
-                style,
-            ));
+            spans.push(Span::styled(&device.name, style));
+        } else {
+            spans.push(Span::styled("No device selected", theme::status_unavailable()));
         }
 
-        // Show status message if present
         if let Some(ref status) = app.status_message {
             spans.push(Span::styled(
                 format!("  [{}]", status),
-                theme::help_style(),
-            ));
-        } else {
-            spans.push(Span::styled(
-                "  [Tab: switch | Enter/i: compose | r: refresh | q: quit]",
                 theme::help_style(),
             ));
         }
@@ -65,8 +51,14 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Line::from(spans)
     };
 
-    let paragraph = Paragraph::new(content).block(block);
-    f.render_widget(paragraph, area);
+    f.render_widget(Paragraph::new(device_line), chunks[0]);
+
+    // Help line
+    let help = Line::from(Span::styled(
+        " Tab:pane  j/k:nav  J/K:page  i:compose  d:devices  r:refresh  q:quit",
+        theme::help_style(),
+    ));
+    f.render_widget(Paragraph::new(help), chunks[1]);
 }
 
 #[cfg(test)]
@@ -80,7 +72,7 @@ mod tests {
     #[test]
     fn test_device_bar_renders_no_devices() {
         let app = App::new_test();
-        let backend = TestBackend::new(60, 5);
+        let backend = TestBackend::new(60, 3);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -104,7 +96,7 @@ mod tests {
         }];
         app.selected_device_idx = Some(0);
 
-        let backend = TestBackend::new(80, 5);
+        let backend = TestBackend::new(80, 3);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -129,7 +121,7 @@ mod tests {
         app.selected_device_idx = Some(0);
         app.status_message = Some("5 conversations loaded".into());
 
-        let backend = TestBackend::new(80, 5);
+        let backend = TestBackend::new(80, 3);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -140,5 +132,22 @@ mod tests {
 
         let content = crate::ui::test_helpers::buffer_to_string(terminal.backend().buffer());
         assert!(content.contains("5 conversations loaded"));
+    }
+
+    #[test]
+    fn test_device_bar_shows_help_line() {
+        let app = App::new_test();
+        let backend = TestBackend::new(80, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                draw(f, &app, f.area());
+            })
+            .unwrap();
+
+        let content = crate::ui::test_helpers::buffer_to_string(terminal.backend().buffer());
+        assert!(content.contains("Tab:pane"));
+        assert!(content.contains("d:devices"));
     }
 }

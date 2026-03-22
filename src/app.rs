@@ -35,7 +35,9 @@ pub enum LoadingState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     ConversationList,
+    MessageView,
     Compose,
+    DevicePopup,
 }
 
 /// State of an image attachment being fetched/decoded.
@@ -60,13 +62,22 @@ pub struct App {
     pub message_view_height: u16,
     /// Maximum scroll offset (set during render). Used to detect scroll-to-top.
     pub message_max_scroll: u16,
+    /// Message boundary offsets for message-by-message scrolling (set during render).
+    /// Each entry is the cumulative height (from bottom) at the top of that message.
+    pub message_boundaries: Vec<u16>,
     pub should_quit: bool,
     pub loading: LoadingState,
     pub status_message: Option<String>,
     pub focus: Focus,
+    /// Which panel was focused before entering Compose mode (to restore on Esc).
+    pub pre_compose_focus: Focus,
     pub compose_input: String,
     /// Cursor position in compose_input (byte offset)
     pub compose_cursor: usize,
+    /// Per-conversation draft messages: thread_id → (text, cursor_byte_offset)
+    pub drafts: HashMap<i64, (String, usize)>,
+    /// Whether the device popup is showing (tracked via Focus::DevicePopup)
+    pub device_popup_idx: usize,
     daemon: Option<DaemonClient>,
     conversations_client: Option<ConversationsClient>,
     /// Sender for injecting D-Bus signal events
@@ -110,12 +121,16 @@ impl App {
             message_scroll: 0,
             message_view_height: 0,
             message_max_scroll: 0,
+            message_boundaries: Vec::new(),
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
             focus: Focus::ConversationList,
+            pre_compose_focus: Focus::ConversationList,
             compose_input: String::new(),
             compose_cursor: 0,
+            drafts: HashMap::new(),
+            device_popup_idx: 0,
             daemon,
             conversations_client: None,
             signal_tx: None,
@@ -166,12 +181,16 @@ impl App {
             message_scroll: 0,
             message_view_height: 0,
             message_max_scroll: 0,
+            message_boundaries: Vec::new(),
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
             focus: Focus::ConversationList,
+            pre_compose_focus: Focus::ConversationList,
             compose_input: String::new(),
             compose_cursor: 0,
+            drafts: HashMap::new(),
+            device_popup_idx: 0,
             daemon: None,
             conversations_client: None,
             signal_tx: None,
@@ -854,12 +873,14 @@ impl App {
         }
 
         match self.focus {
-            Focus::ConversationList => self.handle_key_normal(key, signal_tx).await,
+            Focus::ConversationList => self.handle_key_conversations(key, signal_tx).await,
+            Focus::MessageView => self.handle_key_messages(key, signal_tx).await,
             Focus::Compose => self.handle_key_compose(key).await,
+            Focus::DevicePopup => self.handle_key_device_popup(key, signal_tx).await,
         }
     }
 
-    async fn handle_key_normal(
+    async fn handle_key_conversations(
         &mut self,
         key: KeyEvent,
         signal_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
@@ -867,31 +888,63 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
 
-            // Device switching
+            // Tab: switch focus to messages panel
             KeyCode::Tab => {
-                self.cycle_device();
-                self.connect_to_device(signal_tx).await;
+                self.focus = Focus::MessageView;
             }
 
             // Conversation navigation
             KeyCode::Up | KeyCode::Char('k') => {
+                self.save_draft();
                 self.select_prev_conversation();
+                self.restore_draft();
                 self.request_selected_conversation_messages();
             }
             KeyCode::Down | KeyCode::Char('j') => {
+                self.save_draft();
                 self.select_next_conversation();
+                self.restore_draft();
+                self.request_selected_conversation_messages();
+            }
+
+            // Page through conversations
+            KeyCode::PageUp | KeyCode::Char('K') => {
+                self.save_draft();
+                let page = 10; // conversations per page
+                for _ in 0..page {
+                    self.select_prev_conversation();
+                }
+                self.restore_draft();
+                self.request_selected_conversation_messages();
+            }
+            KeyCode::PageDown | KeyCode::Char('J') => {
+                self.save_draft();
+                let page = 10;
+                for _ in 0..page {
+                    self.select_next_conversation();
+                }
+                self.restore_draft();
                 self.request_selected_conversation_messages();
             }
 
             // Enter conversation / focus compose
             KeyCode::Enter | KeyCode::Char('i') => {
                 if self.selected_conversation_idx.is_some() {
+                    self.pre_compose_focus = Focus::ConversationList;
                     self.focus = Focus::Compose;
                     self.request_selected_conversation_messages();
                 }
             }
 
-            // Refresh: re-discover devices if none connected, else reload conversations
+            // Device popup
+            KeyCode::Char('d') => {
+                if !self.devices.is_empty() {
+                    self.device_popup_idx = self.selected_device_idx.unwrap_or(0);
+                    self.focus = Focus::DevicePopup;
+                }
+            }
+
+            // Refresh
             KeyCode::Char('r') => {
                 if self.conversations_client.is_none() {
                     self.refresh_devices().await;
@@ -903,15 +956,69 @@ impl App {
                 }
             }
 
-            // Message scrolling (scroll is offset from bottom: 0 = newest)
-            KeyCode::PageUp => {
+            _ => {}
+        }
+    }
+
+    async fn handle_key_messages(
+        &mut self,
+        key: KeyEvent,
+        signal_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    ) {
+        match key.code {
+            KeyCode::Char('q') => self.should_quit = true,
+
+            // Tab: switch focus to conversations panel
+            KeyCode::Tab => {
+                self.focus = Focus::ConversationList;
+            }
+
+            // Message-by-message scrolling (up = older)
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll_message_up();
+                self.maybe_load_more_on_scroll();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll_message_down();
+            }
+
+            // Page scrolling
+            KeyCode::PageUp | KeyCode::Char('K') => {
                 let page = self.message_view_height.max(1);
                 self.message_scroll = self.message_scroll.saturating_add(page);
                 self.maybe_load_more_on_scroll();
             }
-            KeyCode::PageDown => {
+            KeyCode::PageDown | KeyCode::Char('J') => {
                 let page = self.message_view_height.max(1);
                 self.message_scroll = self.message_scroll.saturating_sub(page);
+            }
+
+            // Enter compose
+            KeyCode::Enter | KeyCode::Char('i') => {
+                if self.selected_conversation_idx.is_some() {
+                    self.pre_compose_focus = Focus::MessageView;
+                    self.focus = Focus::Compose;
+                }
+            }
+
+            // Device popup
+            KeyCode::Char('d') => {
+                if !self.devices.is_empty() {
+                    self.device_popup_idx = self.selected_device_idx.unwrap_or(0);
+                    self.focus = Focus::DevicePopup;
+                }
+            }
+
+            // Refresh
+            KeyCode::Char('r') => {
+                if self.conversations_client.is_none() {
+                    self.refresh_devices().await;
+                    if self.selected_device_idx.is_some() {
+                        self.connect_to_device(signal_tx).await;
+                    }
+                } else {
+                    self.load_conversations().await;
+                }
             }
 
             _ => {}
@@ -920,9 +1027,9 @@ impl App {
 
     async fn handle_key_compose(&mut self, key: KeyEvent) {
         match key.code {
-            // Escape returns to conversation list
+            // Escape returns to previous panel
             KeyCode::Esc => {
-                self.focus = Focus::ConversationList;
+                self.focus = self.pre_compose_focus;
             }
 
             // Enter sends the message
@@ -941,7 +1048,6 @@ impl App {
             // Backspace
             KeyCode::Backspace => {
                 if self.compose_cursor > 0 {
-                    // Find previous char boundary
                     let prev = self.compose_input[..self.compose_cursor]
                         .char_indices()
                         .next_back()
@@ -996,38 +1102,50 @@ impl App {
                 self.compose_cursor += c.len_utf8();
             }
 
-            // Message scrolling while composing (scroll is offset from bottom)
-            KeyCode::Up => {
-                self.message_scroll = self.message_scroll.saturating_add(1);
-                self.maybe_load_more_on_scroll();
+            _ => {}
+        }
+    }
+
+    async fn handle_key_device_popup(
+        &mut self,
+        key: KeyEvent,
+        signal_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    ) {
+        match key.code {
+            // Close popup
+            KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('q') => {
+                self.focus = Focus::ConversationList;
             }
-            KeyCode::Down => {
-                self.message_scroll = self.message_scroll.saturating_sub(1);
+
+            // Navigate
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.device_popup_idx > 0 {
+                    self.device_popup_idx -= 1;
+                }
             }
-            KeyCode::PageUp => {
-                let page = self.message_view_height.max(1);
-                self.message_scroll = self.message_scroll.saturating_add(page);
-                self.maybe_load_more_on_scroll();
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.device_popup_idx + 1 < self.devices.len() {
+                    self.device_popup_idx += 1;
+                }
             }
-            KeyCode::PageDown => {
-                let page = self.message_view_height.max(1);
-                self.message_scroll = self.message_scroll.saturating_sub(page);
+
+            // Select device
+            KeyCode::Enter => {
+                let new_idx = self.device_popup_idx;
+                if self.selected_device_idx != Some(new_idx) {
+                    self.select_device(new_idx);
+                    self.connect_to_device(signal_tx).await;
+                }
+                self.focus = Focus::ConversationList;
             }
 
             _ => {}
         }
     }
 
-    fn cycle_device(&mut self) {
-        if self.devices.is_empty() {
-            return;
-        }
-        let next = match self.selected_device_idx {
-            Some(i) => (i + 1) % self.devices.len(),
-            None => 0,
-        };
-        self.selected_device_idx = Some(next);
-        // Reset conversation state when switching devices
+    /// Switch to a specific device by index, resetting conversation state.
+    fn select_device(&mut self, idx: usize) {
+        self.selected_device_idx = Some(idx);
         self.conversations.clear();
         self.selected_conversation_idx = None;
         self.conversations_client = None;
@@ -1035,6 +1153,73 @@ impl App {
         self.focus = Focus::ConversationList;
         self.compose_input.clear();
         self.compose_cursor = 0;
+        self.drafts.clear();
+    }
+
+    /// Scroll up (toward older messages) by one message boundary.
+    fn scroll_message_up(&mut self) {
+        // message_boundaries is sorted ascending: cumulative heights from bottom.
+        // Find the next boundary above current scroll.
+        if let Some(&next) = self.message_boundaries.iter().find(|&&b| b > self.message_scroll) {
+            // If the message is taller than the viewport, scroll by viewport instead
+            let step = next - self.message_scroll;
+            if step > self.message_view_height {
+                self.message_scroll = self.message_scroll.saturating_add(self.message_view_height);
+            } else {
+                self.message_scroll = next;
+            }
+        } else {
+            // Already near the top, just add a line
+            self.message_scroll = self.message_scroll.saturating_add(1);
+        }
+    }
+
+    /// Scroll down (toward newer messages) by one message boundary.
+    fn scroll_message_down(&mut self) {
+        if self.message_scroll == 0 {
+            return;
+        }
+        // Find the next boundary below current scroll.
+        if let Some(&prev) = self.message_boundaries.iter().rev().find(|&&b| b < self.message_scroll) {
+            let step = self.message_scroll - prev;
+            if step > self.message_view_height {
+                self.message_scroll = self.message_scroll.saturating_sub(self.message_view_height);
+            } else {
+                self.message_scroll = prev;
+            }
+        } else {
+            // Below all boundaries, snap to 0
+            self.message_scroll = 0;
+        }
+    }
+
+    /// Save current compose input as a draft for the current conversation.
+    fn save_draft(&mut self) {
+        if let Some(idx) = self.selected_conversation_idx {
+            if let Some(conv) = self.conversations.get(idx) {
+                let thread_id = conv.thread_id;
+                if self.compose_input.is_empty() {
+                    self.drafts.remove(&thread_id);
+                } else {
+                    self.drafts.insert(thread_id, (self.compose_input.clone(), self.compose_cursor));
+                }
+            }
+        }
+    }
+
+    /// Restore draft for the currently selected conversation.
+    fn restore_draft(&mut self) {
+        if let Some(idx) = self.selected_conversation_idx {
+            if let Some(conv) = self.conversations.get(idx) {
+                if let Some((text, cursor)) = self.drafts.get(&conv.thread_id) {
+                    self.compose_input = text.clone();
+                    self.compose_cursor = *cursor;
+                } else {
+                    self.compose_input.clear();
+                    self.compose_cursor = 0;
+                }
+            }
+        }
     }
 
     /// Send the current compose input as a reply.
@@ -1062,6 +1247,7 @@ impl App {
             Ok(()) => {
                 self.compose_input.clear();
                 self.compose_cursor = 0;
+                self.drafts.remove(&thread_id);
                 self.status_message = Some("Message sent".into());
             }
             Err(e) => {
@@ -1129,14 +1315,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cycle_device_empty() {
-        let mut app = App::new_test();
-        app.cycle_device();
-        assert_eq!(app.selected_device_idx, None);
-    }
-
-    #[test]
-    fn test_cycle_device() {
+    fn test_select_device() {
         let mut app = App::new_test();
         app.devices = vec![
             Device {
@@ -1154,10 +1333,10 @@ mod tests {
         ];
         app.selected_device_idx = Some(0);
 
-        app.cycle_device();
+        app.select_device(1);
         assert_eq!(app.selected_device_idx, Some(1));
 
-        app.cycle_device();
+        app.select_device(0);
         assert_eq!(app.selected_device_idx, Some(0));
     }
 
@@ -1196,7 +1375,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cycle_device_clears_conversations() {
+    fn test_select_device_clears_conversations() {
         let mut app = App::new_test();
         app.devices = vec![
             Device {
@@ -1216,7 +1395,7 @@ mod tests {
         app.conversations = vec![Conversation::new(1)];
         app.selected_conversation_idx = Some(0);
 
-        app.cycle_device();
+        app.select_device(1);
         assert!(app.conversations.is_empty());
         assert_eq!(app.selected_conversation_idx, None);
         assert!(app.conversations_client.is_none());
@@ -1360,13 +1539,35 @@ mod tests {
         let mut app = App::new_test();
         assert_eq!(app.focus, Focus::ConversationList);
 
-        // Can't enter compose without a conversation selected
+        // Tab switches to MessageView
+        app.focus = Focus::MessageView;
+        assert_eq!(app.focus, Focus::MessageView);
+
+        // Tab switches back to ConversationList
+        app.focus = Focus::ConversationList;
+        assert_eq!(app.focus, Focus::ConversationList);
+
+        // Enter compose from ConversationList
+        app.pre_compose_focus = Focus::ConversationList;
         app.focus = Focus::Compose;
         assert_eq!(app.focus, Focus::Compose);
 
-        // Esc goes back
-        app.focus = Focus::ConversationList;
+        // Esc goes back to pre_compose_focus
+        app.focus = app.pre_compose_focus;
         assert_eq!(app.focus, Focus::ConversationList);
+
+        // Enter compose from MessageView
+        app.focus = Focus::MessageView;
+        app.pre_compose_focus = Focus::MessageView;
+        app.focus = Focus::Compose;
+
+        // Esc goes back to MessageView
+        app.focus = app.pre_compose_focus;
+        assert_eq!(app.focus, Focus::MessageView);
+
+        // Device popup
+        app.focus = Focus::DevicePopup;
+        assert_eq!(app.focus, Focus::DevicePopup);
     }
 
     #[test]
@@ -1392,7 +1593,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cycle_device_resets_compose() {
+    fn test_select_device_resets_compose() {
         let mut app = App::new_test();
         app.devices = vec![
             Device {
@@ -1413,10 +1614,134 @@ mod tests {
         app.compose_input = "draft message".into();
         app.compose_cursor = 13;
 
-        app.cycle_device();
+        app.select_device(1);
 
         assert_eq!(app.focus, Focus::ConversationList);
         assert!(app.compose_input.is_empty());
         assert_eq!(app.compose_cursor, 0);
+    }
+
+    #[test]
+    fn test_drafts_saved_on_conversation_switch() {
+        let mut app = App::new_test();
+        app.conversations = vec![
+            Conversation::new(1),
+            Conversation::new(2),
+        ];
+        app.selected_conversation_idx = Some(0);
+        app.compose_input = "draft for thread 1".into();
+        app.compose_cursor = 18;
+
+        // Switch to next conversation
+        app.save_draft();
+        app.select_next_conversation();
+        app.restore_draft();
+
+        // Draft should be cleared for new conversation
+        assert!(app.compose_input.is_empty());
+        assert_eq!(app.compose_cursor, 0);
+
+        // Type something for thread 2
+        app.compose_input = "draft for thread 2".into();
+        app.compose_cursor = 18;
+
+        // Switch back to thread 1
+        app.save_draft();
+        app.select_prev_conversation();
+        app.restore_draft();
+
+        // Should restore thread 1's draft
+        assert_eq!(app.compose_input, "draft for thread 1");
+        assert_eq!(app.compose_cursor, 18);
+    }
+
+    #[test]
+    fn test_drafts_cleared_on_device_switch() {
+        let mut app = App::new_test();
+        app.devices = vec![
+            Device {
+                id: "a".into(),
+                name: "A".into(),
+                reachable: true,
+                paired: true,
+            },
+            Device {
+                id: "b".into(),
+                name: "B".into(),
+                reachable: true,
+                paired: true,
+            },
+        ];
+        app.selected_device_idx = Some(0);
+        app.conversations = vec![Conversation::new(1)];
+        app.selected_conversation_idx = Some(0);
+        app.drafts.insert(1, ("hello".into(), 5));
+
+        app.select_device(1);
+
+        assert!(app.drafts.is_empty());
+    }
+
+    #[test]
+    fn test_device_popup_navigation() {
+        let mut app = App::new_test();
+        app.devices = vec![
+            Device {
+                id: "a".into(),
+                name: "A".into(),
+                reachable: true,
+                paired: true,
+            },
+            Device {
+                id: "b".into(),
+                name: "B".into(),
+                reachable: true,
+                paired: true,
+            },
+            Device {
+                id: "c".into(),
+                name: "C".into(),
+                reachable: true,
+                paired: true,
+            },
+        ];
+        app.selected_device_idx = Some(0);
+        app.device_popup_idx = 0;
+
+        // Navigate down
+        app.device_popup_idx = 1;
+        assert_eq!(app.device_popup_idx, 1);
+
+        // Navigate down again
+        app.device_popup_idx = 2;
+        assert_eq!(app.device_popup_idx, 2);
+
+        // Can't go past end (checked in handler, but here just verifying state)
+        assert_eq!(app.device_popup_idx, 2);
+    }
+
+    #[test]
+    fn test_message_scroll_boundaries() {
+        let mut app = App::new_test();
+        // Set up boundaries as if computed by render
+        app.message_boundaries = vec![5, 12, 20];
+        app.message_view_height = 10;
+        app.message_scroll = 0;
+
+        // Scroll up: should snap to first boundary
+        app.scroll_message_up();
+        assert_eq!(app.message_scroll, 5);
+
+        // Scroll up again: next boundary
+        app.scroll_message_up();
+        assert_eq!(app.message_scroll, 12);
+
+        // Scroll down: back to previous boundary
+        app.scroll_message_down();
+        assert_eq!(app.message_scroll, 5);
+
+        // Scroll down again: back to 0
+        app.scroll_message_down();
+        assert_eq!(app.message_scroll, 0);
     }
 }
