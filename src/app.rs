@@ -90,6 +90,8 @@ pub struct App {
     pub image_states: HashMap<String, ImageState>,
     /// Attachment unique_identifiers that have been requested (to avoid duplicates)
     pending_attachments: HashSet<String>,
+    /// Tick counter for periodic retry of message loading (250ms per tick).
+    tick_count: u32,
 }
 
 impl App {
@@ -140,6 +142,7 @@ impl App {
             picker: None,
             image_states: HashMap::new(),
             pending_attachments: HashSet::new(),
+            tick_count: 0,
         };
 
         app.refresh_devices().await;
@@ -201,6 +204,7 @@ impl App {
             picker: None,
             image_states: HashMap::new(),
             pending_attachments: HashSet::new(),
+            tick_count: 0,
         }
     }
 
@@ -456,7 +460,10 @@ impl App {
         match event {
             AppEvent::Key(key) => self.handle_key(key, signal_tx).await,
             AppEvent::Resize(_, _) => {}
-            AppEvent::Tick => {}
+            AppEvent::Tick => {
+                self.tick_count = self.tick_count.wrapping_add(1);
+                self.retry_message_loading_if_needed().await;
+            }
             AppEvent::DevicesChanged => {
                 self.refresh_devices().await;
             }
@@ -613,6 +620,56 @@ impl App {
             let client = ConversationsClient::new(connection, device_id);
             if let Err(e) = client.request_conversation(thread_id, start, end).await {
                 tracing::warn!("Failed to load more messages for {}: {}", thread_id, e);
+            }
+        });
+    }
+
+    /// Periodically retry loading messages for the selected conversation
+    /// if they haven't arrived yet.  Called on each Tick (every 250ms).
+    ///
+    /// The kdeconnect daemon sometimes doesn't deliver messages in response
+    /// to `requestConversation` (e.g. if it's still busy with the initial
+    /// `requestAllConversationThreads` sync).  This method retries:
+    ///   - Every 2s: re-send `requestConversation` for the specific thread
+    ///   - After 6s:  fall back to `requestAllConversationThreads` (full re-sync)
+    async fn retry_message_loading_if_needed(&mut self) {
+        // Only act every 8 ticks (2 seconds)
+        if self.tick_count % 8 != 0 {
+            return;
+        }
+
+        let Some(idx) = self.selected_conversation_idx else { return };
+        let Some(conv) = self.conversations.get(idx) else { return };
+
+        // Only retry if we've requested but got nothing
+        if conv.messages_requested == 0 || !conv.messages.is_empty() {
+            return;
+        }
+
+        // After 24 ticks (6 seconds) of empty messages, do a full re-sync
+        // (equivalent to pressing 'r'), which reliably triggers the phone.
+        if conv.messages_requested > Self::MESSAGE_PAGE_SIZE {
+            // Already retried via requestConversation; try full sync
+            self.load_conversations().await;
+            return;
+        }
+
+        // Retry requestConversation and bump messages_requested so we can
+        // detect repeated failures.
+        let thread_id = conv.thread_id;
+        if let Some(conv) = self.conversations.get_mut(idx) {
+            conv.messages_requested += Self::MESSAGE_PAGE_SIZE;
+        }
+
+        let Some(ref client) = self.conversations_client else { return };
+        let connection = client.connection().clone();
+        let device_id = client.device_id().to_owned();
+        let end = Self::MESSAGE_PAGE_SIZE;
+
+        tokio::spawn(async move {
+            let client = ConversationsClient::new(connection, device_id);
+            if let Err(e) = client.request_conversation(thread_id, 0, end).await {
+                tracing::warn!("Retry: failed to request conversation {}: {}", thread_id, e);
             }
         });
     }
