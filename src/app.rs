@@ -92,6 +92,11 @@ pub struct App {
     pending_attachments: HashSet<String>,
     /// Tick counter for periodic retry of message loading (250ms per tick).
     pub tick_count: u32,
+    /// Remaining automatic re-syncs.  kdeconnectd progressively discovers
+    /// messages from the phone across multiple `requestAllConversationThreads`
+    /// calls, so we automatically repeat the request a few times after
+    /// connecting to a device.
+    auto_resync_remaining: u8,
 }
 
 impl App {
@@ -143,6 +148,7 @@ impl App {
             image_states: HashMap::new(),
             pending_attachments: HashSet::new(),
             tick_count: 0,
+            auto_resync_remaining: 0,
         };
 
         app.refresh_devices().await;
@@ -205,6 +211,7 @@ impl App {
             image_states: HashMap::new(),
             pending_attachments: HashSet::new(),
             tick_count: 0,
+            auto_resync_remaining: 0,
         }
     }
 
@@ -272,6 +279,10 @@ impl App {
 
         self.conversations_client = Some(client);
         self.status_message = Some(format!("Connected to {}", device.name));
+        // kdeconnectd progressively discovers messages from the phone across
+        // multiple requestAllConversationThreads calls.  Schedule a few
+        // automatic re-syncs so the user doesn't have to press 'r' manually.
+        self.auto_resync_remaining = Self::AUTO_RESYNC_MAX;
 
         // Trigger initial conversation load
         self.load_conversations().await;
@@ -304,8 +315,11 @@ impl App {
                     .collect();
                 for mut new_conv in convos {
                     if let Some(old) = old_map.remove(&new_conv.thread_id) {
-                        // Preserve loaded messages
+                        // Preserve loaded messages and pagination state
                         new_conv.messages = old.messages;
+                        new_conv.messages_requested = old.messages_requested;
+                        new_conv.total_messages = old.total_messages;
+                        new_conv.loading_more_messages = old.loading_more_messages;
                     }
                     self.conversations.push(new_conv);
                 }
@@ -557,6 +571,11 @@ impl App {
     /// Batch size for message pagination.
     const MESSAGE_PAGE_SIZE: i32 = 50;
 
+    /// Number of automatic re-syncs after connecting to a device.
+    /// kdeconnectd progressively discovers messages from the phone, so
+    /// multiple `requestAllConversationThreads` calls are needed.
+    const AUTO_RESYNC_MAX: u8 = 5;
+
     fn request_selected_conversation_messages(&mut self) {
         let Some(idx) = self.selected_conversation_idx else {
             return;
@@ -635,6 +654,11 @@ impl App {
     /// `requestAllConversationThreads` sync).  This method retries:
     ///   - Every 2s: re-send `requestConversation` for the specific thread
     ///   - After 6s:  fall back to `requestAllConversationThreads` (full re-sync)
+    ///
+    /// Also handles auto-resync: kdeconnectd progressively discovers messages
+    /// from the phone, so multiple `requestAllConversationThreads` calls are
+    /// needed after connecting.  We automatically repeat this up to
+    /// AUTO_RESYNC_MAX times (every 2s) to avoid requiring manual 'r' presses.
     async fn retry_message_loading_if_needed(&mut self) {
         // Only act every 8 ticks (2 seconds)
         if self.tick_count % 8 != 0 {
@@ -644,37 +668,56 @@ impl App {
         let Some(idx) = self.selected_conversation_idx else { return };
         let Some(conv) = self.conversations.get(idx) else { return };
 
-        // Only retry if we've requested but got nothing
-        if conv.messages_requested == 0 || !conv.messages.is_empty() {
-            return;
-        }
-
-        // After 24 ticks (6 seconds) of empty messages, do a full re-sync
-        // (equivalent to pressing 'r'), which reliably triggers the phone.
-        if conv.messages_requested > Self::MESSAGE_PAGE_SIZE {
-            // Already retried via requestConversation; try full sync
-            self.load_conversations().await;
-            return;
-        }
-
-        // Retry requestConversation and bump messages_requested so we can
-        // detect repeated failures.
-        let thread_id = conv.thread_id;
-        if let Some(conv) = self.conversations.get_mut(idx) {
-            conv.messages_requested += Self::MESSAGE_PAGE_SIZE;
-        }
-
-        let Some(ref client) = self.conversations_client else { return };
-        let connection = client.connection().clone();
-        let device_id = client.device_id().to_owned();
-        let end = Self::MESSAGE_PAGE_SIZE;
-
-        tokio::spawn(async move {
-            let client = ConversationsClient::new(connection, device_id);
-            if let Err(e) = client.request_conversation(thread_id, 0, end).await {
-                tracing::warn!("Retry: failed to request conversation {}: {}", thread_id, e);
+        // If we've requested messages but got none, retry the specific conversation
+        if conv.messages_requested > 0 && conv.messages.is_empty() {
+            // After 24 ticks (6 seconds) of empty messages, do a full re-sync
+            // (equivalent to pressing 'r'), which reliably triggers the phone.
+            if conv.messages_requested > Self::MESSAGE_PAGE_SIZE {
+                // Already retried via requestConversation; try full sync
+                self.load_conversations().await;
+                return;
             }
-        });
+
+            // Retry requestConversation and bump messages_requested so we can
+            // detect repeated failures.
+            let thread_id = conv.thread_id;
+            if let Some(conv) = self.conversations.get_mut(idx) {
+                conv.messages_requested += Self::MESSAGE_PAGE_SIZE;
+            }
+
+            let Some(ref client) = self.conversations_client else { return };
+            let connection = client.connection().clone();
+            let device_id = client.device_id().to_owned();
+            let end = Self::MESSAGE_PAGE_SIZE;
+
+            tokio::spawn(async move {
+                let client = ConversationsClient::new(connection, device_id);
+                if let Err(e) = client.request_conversation(thread_id, 0, end).await {
+                    tracing::warn!("Retry: failed to request conversation {}: {}", thread_id, e);
+                }
+            });
+            return;
+        }
+
+        // Auto-resync: periodically re-request all conversation threads so
+        // that kdeconnectd discovers additional messages from the phone.
+        if self.auto_resync_remaining > 0 {
+            self.auto_resync_remaining -= 1;
+            tracing::debug!(
+                "Auto-resync ({} remaining): requesting all conversation threads",
+                self.auto_resync_remaining
+            );
+            if let Some(ref client) = self.conversations_client {
+                let connection = client.connection().clone();
+                let device_id = client.device_id().to_owned();
+                tokio::spawn(async move {
+                    let client = ConversationsClient::new(connection, device_id);
+                    if let Err(e) = client.request_all_conversation_threads().await {
+                        tracing::warn!("Auto-resync failed: {}", e);
+                    }
+                });
+            }
+        }
     }
 
     /// If the user has scrolled near the top of the message view, or the
