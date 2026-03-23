@@ -183,11 +183,12 @@ src/
 ├── main.rs                   # Entry point, tokio runtime, arg parsing
 ├── app.rs                    # App state machine, event loop
 ├── config.rs                 # Config file (~/.config/kdeconnect-sms-tui/config.toml)
+├── state.rs                  # App state (~/.local/state/kdeconnect-sms-tui/state.toml)
 ├── dbus/
 │   ├── mod.rs
 │   ├── daemon.rs             # Device discovery, pairing status
-│   ├── conversations.rs      # Conversation list, message fetching
-│   ├── messages.rs           # Send/reply, attachments
+│   ├── conversations.rs      # Conversation list, message fetching, send/reply
+│   ├── signals.rs            # D-Bus signal listeners for real-time updates
 │   └── types.rs              # D-Bus type mappings (Message, Conversation, Address)
 ├── contacts.rs                   # Parse vCards from ~/.local/share/kpeoplevcard/, phone→name map
 ├── ui/
@@ -195,9 +196,11 @@ src/
 │   ├── device_bar.rs         # Device selector (top bar)
 │   ├── conversation_list.rs  # Left panel: conversation list with previews
 │   ├── message_view.rs       # Right panel: message thread with images
-│   ├── compose.rs            # Message input with attachment picker
-│   ├── image_display.rs      # Inline image rendering via ratatui-image
-│   ├── group_rename.rs       # Group rename dialog
+│   ├── compose.rs            # Message input
+│   ├── device_popup.rs       # Device selector popup
+│   ├── folder_popup.rs       # Archive/spam folder viewer
+│   ├── group_info_popup.rs   # Group rename dialog
+│   ├── test_helpers.rs       # Shared test utilities for UI tests
 │   └── theme.rs              # Colors, styling
 ├── models/
 │   ├── mod.rs
@@ -252,7 +255,7 @@ src/
 ### Phase 5: Group Messages & Replies
 - [x] Handle multi-address conversations (group detection via address count)
 - [ ] Display group member list
-- [ ] Group rename functionality (stored locally in config)
+- [x] Group rename functionality (stored in state file)
 - [ ] Reply context (quote/reference previous message if supported)
 - [x] **Tests**: Group detection
 
@@ -267,13 +270,14 @@ src/
 - [ ] Keyboard shortcuts help overlay (?)
 - [ ] Search/filter conversations
 - [ ] Notification indicator for new messages (unread count)
-- [x] Config file for: default device, theme
+- [x] Config file for default device (`~/.config/kdeconnect-sms-tui/config.toml`)
+- [x] State file for group names, archive/spam lists (`~/.local/state/kdeconnect-sms-tui/state.toml`)
 - [ ] Proper emoji rendering with grapheme cluster awareness
 - [ ] Clipboard support for copying message text
-- [ ] Show/hide archived and/or spam conversations (if supported by kdeconnect API)
+- [x] Archive/spam folders with auto-restore on new incoming messages
 - [x] Panic hook to restore terminal on crash
 - [x] Safe string truncation (char-boundary-aware)
-- [x] **Tests**: Config parsing
+- [x] **Tests**: Config parsing, state serialization
 
 ---
 
@@ -282,7 +286,7 @@ src/
 ### Unit Tests
 - **D-Bus type parsing**: Verify QVariant → Rust struct conversions for all message types
 - **Model logic**: Conversation sorting, group detection, attachment path resolution
-- **Config**: Parse/write config toml, handle missing/malformed files
+- **Config/State**: Parse/write config and state toml, handle missing/malformed files
 - **UI state**: State machine transitions (selecting device → loading conversations → viewing messages)
 
 ### Integration Tests (require mock D-Bus or running kdeconnectd)

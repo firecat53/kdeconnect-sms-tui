@@ -39,6 +39,9 @@ are saved per-conversation when you switch away.
 | `Tab` | Switch focus between panels |
 | `Enter` / `i` | Focus compose input |
 | `d` | Open device selector |
+| `g` | Edit group name (conversations panel) |
+| `a` / `s` | Archive / spam selected conversation |
+| `A` / `S` | View archived / spam folder |
 | `r` | Refresh conversations / reconnect |
 | `q` | Quit |
 
@@ -109,10 +112,13 @@ Config file: `~/.config/kdeconnect-sms-tui/config.toml`
 
 ```toml
 default_device = "device_id_here"
-
-[group_names]
-"12345" = "Family Chat"
 ```
+
+## State
+
+Application state (group names, archived/spam thread lists) is stored
+separately from config at `~/.local/state/kdeconnect-sms-tui/state.toml`
+(`$XDG_STATE_HOME`). This file is managed automatically by the app.
 
 ## Contacts
 
@@ -124,9 +130,11 @@ Contact names are read from KDE Connect's synced vCards at `~/.local/share/kpeop
 - Send/receive SMS and MMS
 - Inline image display (Kitty, Sixel, iTerm2, halfblocks)
 - Contact name resolution from synced vCards
-- Group conversation support
+- Group conversation support with custom naming
 - Multiple device switching with popup selector
 - Per-conversation draft messages
+- Archive and spam folders for hiding conversations
+- Auto-restore archived/spam threads on new incoming messages
 
 ## License
 
