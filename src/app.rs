@@ -97,6 +97,11 @@ pub struct App {
     /// calls, so we automatically repeat the request a few times after
     /// connecting to a device.
     auto_resync_remaining: u8,
+    /// Instant of last successful send.  Used to suppress daemon polling
+    /// (requestConversation, activeConversations, requestAllConversationThreads)
+    /// for a short cooldown after sending so the daemon can finish processing
+    /// without interference — prevents duplicate delivery.
+    last_send_time: Option<std::time::Instant>,
 }
 
 impl App {
@@ -149,6 +154,7 @@ impl App {
             pending_attachments: HashSet::new(),
             tick_count: 0,
             auto_resync_remaining: 0,
+            last_send_time: None,
         };
 
         app.refresh_devices().await;
@@ -212,6 +218,7 @@ impl App {
             pending_attachments: HashSet::new(),
             tick_count: 0,
             auto_resync_remaining: 0,
+            last_send_time: None,
         }
     }
 
@@ -371,6 +378,9 @@ impl App {
     /// Fetch cached conversations from kdeconnect without requesting a new sync.
     /// Preserves any messages already loaded in existing conversations.
     async fn refresh_cached_conversations(&mut self) {
+        if self.in_send_cooldown() {
+            return;
+        }
         let Some(ref client) = self.conversations_client else {
             return;
         };
@@ -409,6 +419,19 @@ impl App {
                 self.status_message = Some(format!("Refresh error: {}", e));
             }
         }
+    }
+
+    /// Post-send cooldown period.  After sending a message we suppress daemon
+    /// polling (requestConversation, activeConversations, requestAllConversation-
+    /// Threads) for this duration so the daemon can finish processing the send
+    /// without interference from our requests.  This prevents duplicate delivery
+    /// that occurs when aggressive polling hits the daemon mid-send.
+    const SEND_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Returns `true` if we recently sent a message and should avoid daemon requests.
+    fn in_send_cooldown(&self) -> bool {
+        self.last_send_time
+            .is_some_and(|t| t.elapsed() < Self::SEND_COOLDOWN)
     }
 
     pub fn selected_device(&self) -> Option<&Device> {
@@ -725,6 +748,10 @@ impl App {
         if self.tick_count % 8 != 0 {
             return;
         }
+        // Don't poll the daemon right after sending a message.
+        if self.in_send_cooldown() {
+            return;
+        }
 
         let Some(idx) = self.selected_conversation_idx else { return };
         let Some(conv) = self.conversations.get(idx) else { return };
@@ -784,6 +811,10 @@ impl App {
     /// If the user has scrolled near the top of the message view, or the
     /// viewport isn't full yet, request the next page of older messages.
     fn maybe_load_more_on_scroll(&mut self) {
+        // Don't request more messages right after sending.
+        if self.in_send_cooldown() {
+            return;
+        }
         // If content doesn't fill the viewport, always try to load more.
         if self.message_max_scroll == 0 {
             self.load_more_messages();
@@ -1452,6 +1483,9 @@ impl App {
                 self.compose_cursor = 0;
                 self.drafts.remove(&thread_id);
                 self.status_message = Some("Message sent".into());
+                // Start the post-send cooldown to prevent daemon polling
+                // from interfering with message delivery.
+                self.last_send_time = Some(std::time::Instant::now());
             }
             Err(e) => {
                 self.status_message = Some(format!("Send failed: {}", e));
