@@ -3,6 +3,8 @@ pub mod conversation_list;
 pub mod message_view;
 pub mod compose;
 pub mod device_popup;
+pub mod group_info_popup;
+pub mod folder_popup;
 pub mod theme;
 
 #[cfg(test)]
@@ -82,8 +84,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     message_view::draw(f, app, right_chunks[0]);
     compose::draw(f, app, right_chunks[1]);
 
-    // Device popup overlay (rendered last, on top)
-    if app.focus == Focus::DevicePopup {
-        device_popup::draw(f, app);
+    // Popup overlays (rendered last, on top)
+    match app.focus {
+        Focus::DevicePopup => device_popup::draw(f, app),
+        Focus::GroupInfoPopup => group_info_popup::draw(f, app),
+        Focus::FolderPopup => folder_popup::draw(f, app),
+        _ => {}
     }
 }

@@ -23,6 +23,21 @@ use crate::models::conversation::{sort_by_recent, Conversation};
 use crate::models::device::Device;
 use crate::models::message::Message;
 
+/// Extract initials from a display name.
+/// "Alice Smith" → "AS", "Bob" → "B", "+15551234" → "+"
+fn name_to_initials(name: &str) -> String {
+    let parts: Vec<&str> = name.split_whitespace().collect();
+    match parts.len() {
+        0 => String::new(),
+        1 => parts[0].chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default(),
+        _ => {
+            let first = parts[0].chars().next().unwrap_or(' ');
+            let last = parts.last().unwrap().chars().next().unwrap_or(' ');
+            format!("{}{}", first.to_uppercase(), last.to_uppercase())
+        }
+    }
+}
+
 /// Loading state for async operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadingState {
@@ -38,6 +53,15 @@ pub enum Focus {
     MessageView,
     Compose,
     DevicePopup,
+    GroupInfoPopup,
+    FolderPopup,
+}
+
+/// Which folder popup is currently open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderKind {
+    Archive,
+    Spam,
 }
 
 /// State of an image attachment being fetched/decoded.
@@ -102,6 +126,14 @@ pub struct App {
     /// for a short cooldown after sending so the daemon can finish processing
     /// without interference — prevents duplicate delivery.
     last_send_time: Option<std::time::Instant>,
+    /// Group info popup: text input for editing the group name
+    pub group_name_input: String,
+    /// Cursor byte offset in group_name_input
+    pub group_name_cursor: usize,
+    /// Which folder popup (archive/spam) is open
+    pub folder_popup_kind: FolderKind,
+    /// Selected index in the folder popup list
+    pub folder_popup_idx: usize,
     /// Request a full terminal repaint on the next draw cycle.
     /// Set when dismissing overlays (e.g. device popup) that may have
     /// erased protocol-based images (Kitty/Sixel).
@@ -159,6 +191,10 @@ impl App {
             tick_count: 0,
             auto_resync_remaining: 0,
             last_send_time: None,
+            group_name_input: String::new(),
+            group_name_cursor: 0,
+            folder_popup_kind: FolderKind::Archive,
+            folder_popup_idx: 0,
             needs_full_repaint: false,
         };
 
@@ -224,6 +260,10 @@ impl App {
             tick_count: 0,
             auto_resync_remaining: 0,
             last_send_time: None,
+            group_name_input: String::new(),
+            group_name_cursor: 0,
+            folder_popup_kind: FolderKind::Archive,
+            folder_popup_idx: 0,
             needs_full_repaint: false,
         }
     }
@@ -1153,6 +1193,8 @@ impl App {
             Focus::MessageView => self.handle_key_messages(key, signal_tx).await,
             Focus::Compose => self.handle_key_compose(key).await,
             Focus::DevicePopup => self.handle_key_device_popup(key, signal_tx).await,
+            Focus::GroupInfoPopup => self.handle_key_group_info(key),
+            Focus::FolderPopup => self.handle_key_folder_popup(key),
         }
     }
 
@@ -1232,6 +1274,29 @@ impl App {
                 }
             }
 
+            // Group info popup
+            KeyCode::Char('g') => {
+                self.open_group_info_popup();
+            }
+
+            // Archive conversation
+            KeyCode::Char('a') => {
+                self.archive_selected_conversation();
+            }
+            // View archived conversations
+            KeyCode::Char('A') => {
+                self.open_folder_popup(FolderKind::Archive);
+            }
+
+            // Spam conversation
+            KeyCode::Char('s') => {
+                self.spam_selected_conversation();
+            }
+            // View spam conversations
+            KeyCode::Char('S') => {
+                self.open_folder_popup(FolderKind::Spam);
+            }
+
             _ => {}
         }
     }
@@ -1295,6 +1360,11 @@ impl App {
                 } else {
                     self.load_conversations().await;
                 }
+            }
+
+            // Group info popup
+            KeyCode::Char('g') => {
+                self.open_group_info_popup();
             }
 
             _ => {}
@@ -1434,6 +1504,269 @@ impl App {
         self.drafts.clear();
     }
 
+    // ── Group info popup ────────────────────────────────────────────
+
+    fn open_group_info_popup(&mut self) {
+        let Some(idx) = self.selected_conversation_idx else { return };
+        let Some(conv) = self.conversations.get(idx) else { return };
+        let thread_id = conv.thread_id;
+
+        // Pre-fill with existing custom name, or generate initials
+        let existing = self
+            .config
+            .group_names
+            .get(&thread_id.to_string())
+            .cloned();
+        let name = existing.unwrap_or_else(|| self.generate_group_initials(conv));
+        self.group_name_input = name;
+        self.group_name_cursor = self.group_name_input.len();
+        self.focus = Focus::GroupInfoPopup;
+    }
+
+    fn handle_key_group_info(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.focus = Focus::ConversationList;
+                self.needs_full_repaint = true;
+            }
+            KeyCode::Enter => {
+                // Save group name
+                if let Some(idx) = self.selected_conversation_idx {
+                    if let Some(conv) = self.conversations.get(idx) {
+                        let tid = conv.thread_id.to_string();
+                        let name = self.group_name_input.trim().to_string();
+                        if name.is_empty() {
+                            self.config.group_names.remove(&tid);
+                        } else {
+                            self.config.group_names.insert(tid, name);
+                        }
+                        if let Err(e) = self.config.save() {
+                            self.status_message = Some(format!("Failed to save config: {}", e));
+                        }
+                    }
+                }
+                self.focus = Focus::ConversationList;
+                self.needs_full_repaint = true;
+            }
+            KeyCode::Backspace => {
+                if self.group_name_cursor > 0 {
+                    let prev = self.group_name_input[..self.group_name_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.group_name_input.drain(prev..self.group_name_cursor);
+                    self.group_name_cursor = prev;
+                }
+            }
+            KeyCode::Delete => {
+                if self.group_name_cursor < self.group_name_input.len() {
+                    let next = self.group_name_input[self.group_name_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.group_name_cursor + i)
+                        .unwrap_or(self.group_name_input.len());
+                    self.group_name_input.drain(self.group_name_cursor..next);
+                }
+            }
+            KeyCode::Left => {
+                if self.group_name_cursor > 0 {
+                    self.group_name_cursor = self.group_name_input[..self.group_name_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+            KeyCode::Right => {
+                if self.group_name_cursor < self.group_name_input.len() {
+                    self.group_name_cursor = self.group_name_input[self.group_name_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.group_name_cursor + i)
+                        .unwrap_or(self.group_name_input.len());
+                }
+            }
+            KeyCode::Home => self.group_name_cursor = 0,
+            KeyCode::End => self.group_name_cursor = self.group_name_input.len(),
+            KeyCode::Char(c) => {
+                self.group_name_input.insert(self.group_name_cursor, c);
+                self.group_name_cursor += c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    /// Generate default group name from member initials.
+    /// e.g. "Alice Smith, Bob, +15551234" → "AS,B,+"
+    fn generate_group_initials(&self, conv: &Conversation) -> String {
+        let addrs = conv
+            .latest_message
+            .as_ref()
+            .map(|m| &m.addresses[..])
+            .unwrap_or(&[]);
+
+        let mut entries: Vec<(String, String)> = addrs
+            .iter()
+            .map(|a| {
+                let name = self.contacts.display_name(&a.address);
+                let initials = name_to_initials(&name);
+                (name, initials)
+            })
+            .collect();
+
+        // Sort by last name then first name
+        entries.sort_by(|(a, _), (b, _)| {
+            let a_parts: Vec<&str> = a.split_whitespace().collect();
+            let b_parts: Vec<&str> = b.split_whitespace().collect();
+            let a_last = a_parts.last().unwrap_or(&"");
+            let b_last = b_parts.last().unwrap_or(&"");
+            let a_first = a_parts.first().unwrap_or(&"");
+            let b_first = b_parts.first().unwrap_or(&"");
+            a_last.cmp(b_last).then(a_first.cmp(b_first))
+        });
+
+        entries.into_iter().map(|(_, i)| i).collect::<Vec<_>>().join(",")
+    }
+
+    /// Get the sorted member list for the group info popup.
+    pub fn group_members(&self) -> Vec<(String, String)> {
+        let Some(idx) = self.selected_conversation_idx else {
+            return vec![];
+        };
+        let Some(conv) = self.conversations.get(idx) else {
+            return vec![];
+        };
+        let addrs = conv
+            .latest_message
+            .as_ref()
+            .map(|m| &m.addresses[..])
+            .unwrap_or(&[]);
+
+        let mut members: Vec<(String, String)> = addrs
+            .iter()
+            .map(|a| {
+                let name = self.contacts.display_name(&a.address);
+                let phone = a.address.clone();
+                (name, phone)
+            })
+            .collect();
+
+        // Sort by last name then first name
+        members.sort_by(|(a, _), (b, _)| {
+            let a_parts: Vec<&str> = a.split_whitespace().collect();
+            let b_parts: Vec<&str> = b.split_whitespace().collect();
+            let a_last = a_parts.last().unwrap_or(&"");
+            let b_last = b_parts.last().unwrap_or(&"");
+            let a_first = a_parts.first().unwrap_or(&"");
+            let b_first = b_parts.first().unwrap_or(&"");
+            a_last.cmp(b_last).then(a_first.cmp(b_first))
+        });
+
+        members
+    }
+
+    // ── Archive / Spam ──────────────────────────────────────────────
+
+    fn archive_selected_conversation(&mut self) {
+        let Some(idx) = self.selected_conversation_idx else { return };
+        let Some(conv) = self.conversations.get(idx) else { return };
+        let thread_id = conv.thread_id;
+        self.config.toggle_archived(thread_id);
+        if let Err(e) = self.config.save() {
+            self.status_message = Some(format!("Failed to save config: {}", e));
+        }
+        // Move selection to next visible conversation
+        self.adjust_selection_after_hide();
+    }
+
+    fn spam_selected_conversation(&mut self) {
+        let Some(idx) = self.selected_conversation_idx else { return };
+        let Some(conv) = self.conversations.get(idx) else { return };
+        let thread_id = conv.thread_id;
+        self.config.toggle_spam(thread_id);
+        if let Err(e) = self.config.save() {
+            self.status_message = Some(format!("Failed to save config: {}", e));
+        }
+        self.adjust_selection_after_hide();
+    }
+
+    fn adjust_selection_after_hide(&mut self) {
+        let visible: Vec<usize> = self.visible_conversation_indices();
+        if visible.is_empty() {
+            self.selected_conversation_idx = None;
+        } else if let Some(sel) = self.selected_conversation_idx {
+            // Try to keep same index or move to nearest visible
+            self.selected_conversation_idx = visible
+                .iter()
+                .find(|&&i| i >= sel)
+                .or(visible.last())
+                .copied();
+        }
+    }
+
+    fn open_folder_popup(&mut self, kind: FolderKind) {
+        self.folder_popup_kind = kind;
+        self.folder_popup_idx = 0;
+        self.focus = Focus::FolderPopup;
+    }
+
+    fn handle_key_folder_popup(&mut self, key: KeyEvent) {
+        let threads = self.folder_thread_ids();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.focus = Focus::ConversationList;
+                self.needs_full_repaint = true;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.folder_popup_idx > 0 {
+                    self.folder_popup_idx -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.folder_popup_idx + 1 < threads.len() {
+                    self.folder_popup_idx += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(&thread_id) = threads.get(self.folder_popup_idx) {
+                    // Restore conversation and select it
+                    self.config.unarchive(thread_id);
+                    if let Err(e) = self.config.save() {
+                        self.status_message = Some(format!("Failed to save config: {}", e));
+                    }
+                    // Select the restored conversation
+                    if let Some(pos) = self.conversations.iter().position(|c| c.thread_id == thread_id) {
+                        self.selected_conversation_idx = Some(pos);
+                        self.message_scroll = 0;
+                        self.request_selected_conversation_messages();
+                    }
+                    self.focus = Focus::ConversationList;
+                    self.needs_full_repaint = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Returns the list of thread_ids for the currently open folder popup.
+    pub fn folder_thread_ids(&self) -> Vec<i64> {
+        match self.folder_popup_kind {
+            FolderKind::Archive => self.config.archived_threads.clone(),
+            FolderKind::Spam => self.config.spam_threads.clone(),
+        }
+    }
+
+    /// Returns indices of conversations that are not archived or spam.
+    pub fn visible_conversation_indices(&self) -> Vec<usize> {
+        self.conversations
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !self.config.is_hidden(c.thread_id))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     /// Scroll up (toward older messages) by one message boundary.
     fn scroll_message_up(&mut self) {
         // message_boundaries is sorted ascending.
@@ -1537,25 +1870,28 @@ impl App {
     }
 
     fn select_prev_conversation(&mut self) {
-        if self.conversations.is_empty() {
+        let visible = self.visible_conversation_indices();
+        if visible.is_empty() {
+            self.selected_conversation_idx = None;
             return;
         }
         let new_idx = match self.selected_conversation_idx {
-            Some(0) | None => 0,
-            Some(i) => i - 1,
+            None => *visible.first().unwrap(),
+            Some(cur) => visible.iter().rev().find(|&&i| i < cur).copied().unwrap_or(visible[0]),
         };
         self.selected_conversation_idx = Some(new_idx);
         self.message_scroll = 0;
     }
 
     fn select_next_conversation(&mut self) {
-        if self.conversations.is_empty() {
+        let visible = self.visible_conversation_indices();
+        if visible.is_empty() {
+            self.selected_conversation_idx = None;
             return;
         }
-        let max = self.conversations.len().saturating_sub(1);
         let new_idx = match self.selected_conversation_idx {
-            None => 0,
-            Some(i) => (i + 1).min(max),
+            None => *visible.first().unwrap(),
+            Some(cur) => visible.iter().find(|&&i| i > cur).copied().unwrap_or(*visible.last().unwrap()),
         };
         self.selected_conversation_idx = Some(new_idx);
         self.message_scroll = 0;

@@ -46,10 +46,18 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let items: Vec<ListItem> = app
+    // Build (filtered_index, original_index, conversation) tuples,
+    // skipping archived/spam conversations.
+    let visible: Vec<(usize, &crate::models::conversation::Conversation)> = app
         .conversations
         .iter()
-        .map(|conv| {
+        .enumerate()
+        .filter(|(_, conv)| !app.config.is_hidden(conv.thread_id))
+        .collect();
+
+    let items: Vec<ListItem> = visible
+        .iter()
+        .map(|(_, conv)| {
             let name: String = if let Some(n) = conv.display_name.as_deref() {
                 n.to_string()
             } else if let Some(n) = app.config.group_names.get(&conv.thread_id.to_string()) {
@@ -116,7 +124,11 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(theme::selected_style());
 
     let mut state = ListState::default();
-    state.select(app.selected_conversation_idx);
+    // Map the original selected index to the filtered list position.
+    let filtered_idx = app.selected_conversation_idx.and_then(|sel| {
+        visible.iter().position(|(orig_idx, _)| *orig_idx == sel)
+    });
+    state.select(filtered_idx);
     f.render_stateful_widget(list, area, &mut state);
 }
 

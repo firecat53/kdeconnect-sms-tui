@@ -8,7 +8,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::App;
 use super::theme;
 
-const HELP_TEXT: &str = "Tab:pane  j/k:nav  J/K:page  i:compose  d:devices  r:refresh  q:quit";
+const HELP_TEXT: &str = "Tab:pane  j/k:nav  J/K:page  i:compose  g:info  a/A:archive  s/S:spam  d:devices  r:refresh  q:quit";
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let width = area.width as usize;
@@ -94,7 +94,7 @@ mod tests {
         }];
         app.selected_device_idx = Some(0);
 
-        let backend = TestBackend::new(100, 1);
+        let backend = TestBackend::new(120, 1);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -144,7 +144,7 @@ mod tests {
         }];
         app.selected_device_idx = Some(0);
 
-        let backend = TestBackend::new(100, 1);
+        let backend = TestBackend::new(120, 1);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
