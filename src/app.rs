@@ -350,7 +350,7 @@ impl App {
                     }
                     self.conversations.push(new_conv);
                 }
-                sort_by_recent(&mut self.conversations);
+                self.sort_conversations();
                 self.loading = LoadingState::Idle;
                 let count = self.conversations.len();
                 self.status_message = Some(format!("{} conversations loaded", count));
@@ -395,7 +395,7 @@ impl App {
                         self.conversations.push(new_conv);
                     }
                 }
-                sort_by_recent(&mut self.conversations);
+                self.sort_conversations();
                 self.loading = LoadingState::Idle;
                 let count = self.conversations.len();
                 self.status_message = Some(format!("{} conversations loaded", count));
@@ -558,6 +558,27 @@ impl App {
         }
     }
 
+    /// Sort conversations by most-recent and update `selected_conversation_idx`
+    /// so it continues to point at the same thread (rather than a stale numeric
+    /// position).  Without this, sending a message in a non-first conversation
+    /// causes the sort to move that thread to the top while the selection index
+    /// still points at the old slot.
+    fn sort_conversations(&mut self) {
+        // Remember which thread is selected *before* the sort.
+        let selected_thread = self
+            .selected_conversation_idx
+            .and_then(|i| self.conversations.get(i))
+            .map(|c| c.thread_id);
+
+        sort_by_recent(&mut self.conversations);
+
+        // Restore the selection to the same thread at its new position.
+        if let Some(tid) = selected_thread {
+            self.selected_conversation_idx =
+                self.conversations.iter().position(|c| c.thread_id == tid);
+        }
+    }
+
     /// Handle a new conversation appearing via D-Bus signal.
     fn handle_conversation_created(&mut self, msg: Message) {
         let thread_id = msg.thread_id;
@@ -581,7 +602,7 @@ impl App {
             self.conversations.push(conv);
         }
 
-        sort_by_recent(&mut self.conversations);
+        self.sort_conversations();
     }
 
     /// Handle a conversation update (new message in existing thread).
@@ -603,7 +624,7 @@ impl App {
             return;
         }
 
-        sort_by_recent(&mut self.conversations);
+        self.sort_conversations();
     }
 
     /// Request message history for the currently selected conversation.
@@ -1469,17 +1490,23 @@ impl App {
 /// kdeconnect can deliver the same message multiple times — via both
 /// `conversationCreated` and `conversationUpdated` signals, or via signal
 /// + conversation reload.  The uid may differ between deliveries (e.g. 0
-/// before the phone assigns the real SMS ID), so we use multiple strategies:
+/// before the phone assigns the real SMS ID), and the timestamp can shift
+/// by a few seconds between the queued and delivered states (especially
+/// for MMS).  We use multiple strategies:
 ///   1. If the incoming uid > 0 and matches an existing uid → duplicate.
-///   2. Otherwise, match on body + date (same text at the same timestamp).
+///   2. Same body + date within 5 seconds → duplicate (covers uid==0,
+///      mismatched-uid, and MMS timestamp drift).
 fn insert_message_sorted(messages: &mut Vec<Message>, msg: Message) {
+    // 5 seconds in milliseconds — kdeconnect timestamps are in epoch ms.
+    const TIMESTAMP_FUZZ_MS: i64 = 5_000;
+
     let dominated = messages.iter().any(|m| {
         // Exact uid match (when the id is known)
         if msg.uid != 0 && m.uid == msg.uid {
             return true;
         }
-        // Fallback: same body + date (covers uid==0 or mismatched-uid cases)
-        m.date == msg.date && m.body == msg.body
+        // Fallback: same body + date within a small window
+        m.body == msg.body && (m.date - msg.date).abs() <= TIMESTAMP_FUZZ_MS
     });
     if dominated {
         return;
@@ -1734,6 +1761,31 @@ mod tests {
         insert_message_sorted(&mut messages, msg2);
 
         assert_eq!(messages.len(), 1, "same body+date should dedup even with different uids");
+    }
+
+    #[test]
+    fn test_insert_message_dedup_fuzzy_timestamp() {
+        // MMS messages can arrive with slightly different timestamps
+        // between signal deliveries (queued vs delivered).
+        let mut messages = Vec::new();
+
+        let mut msg1 = make_test_message(1, 1700000000000, "hello via MMS");
+        msg1.uid = 0;
+        insert_message_sorted(&mut messages, msg1);
+
+        // Same body, 3 seconds later — still a duplicate
+        let mut msg2 = make_test_message(1, 1700000003000, "hello via MMS");
+        msg2.uid = 77;
+        insert_message_sorted(&mut messages, msg2);
+
+        assert_eq!(messages.len(), 1, "same body within 5s window should dedup");
+
+        // Same body, 6 seconds later — genuinely different
+        let mut msg3 = make_test_message(1, 1700000006001, "hello via MMS");
+        msg3.uid = 88;
+        insert_message_sorted(&mut messages, msg3);
+
+        assert_eq!(messages.len(), 2, "same body outside 5s window is a new message");
     }
 
     #[test]
