@@ -5,6 +5,7 @@ pub mod compose;
 pub mod device_popup;
 pub mod group_info_popup;
 pub mod folder_popup;
+pub mod help_popup;
 pub mod theme;
 
 #[cfg(test)]
@@ -89,6 +90,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Focus::DevicePopup => device_popup::draw(f, app),
         Focus::GroupInfoPopup => group_info_popup::draw(f, app),
         Focus::FolderPopup => folder_popup::draw(f, app),
+        Focus::HelpPopup => help_popup::draw(f),
         _ => {}
     }
 }

@@ -56,6 +56,7 @@ pub enum Focus {
     DevicePopup,
     GroupInfoPopup,
     FolderPopup,
+    HelpPopup,
 }
 
 /// Which folder popup is currently open.
@@ -1240,6 +1241,11 @@ impl App {
             Focus::DevicePopup => self.handle_key_device_popup(key, signal_tx).await,
             Focus::GroupInfoPopup => self.handle_key_group_info(key),
             Focus::FolderPopup => self.handle_key_folder_popup(key),
+            Focus::HelpPopup => {
+                // Any key dismisses the help popup
+                self.focus = Focus::ConversationList;
+                self.needs_full_repaint = true;
+            }
         }
     }
 
@@ -1251,9 +1257,14 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
 
-            // Tab: switch focus to messages panel
-            KeyCode::Tab => {
+            // Switch focus to messages panel
+            KeyCode::Tab | KeyCode::Char('l') => {
                 self.focus = Focus::MessageView;
+            }
+
+            // Help popup
+            KeyCode::Char('?') => {
+                self.focus = Focus::HelpPopup;
             }
 
             // Conversation navigation
@@ -1354,9 +1365,14 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
 
-            // Tab: switch focus to conversations panel
-            KeyCode::Tab => {
+            // Switch focus to conversations panel
+            KeyCode::Tab | KeyCode::Char('h') => {
                 self.focus = Focus::ConversationList;
+            }
+
+            // Help popup
+            KeyCode::Char('?') => {
+                self.focus = Focus::HelpPopup;
             }
 
             // Message-by-message scrolling (up = older)

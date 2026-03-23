@@ -200,6 +200,7 @@ src/
 │   ├── device_popup.rs       # Device selector popup
 │   ├── folder_popup.rs       # Archive/spam folder viewer
 │   ├── group_info_popup.rs   # Group rename dialog
+│   ├── help_popup.rs         # Keybinding help overlay (?)
 │   ├── test_helpers.rs       # Shared test utilities for UI tests
 │   └── theme.rs              # Colors, styling
 ├── models/
@@ -267,7 +268,7 @@ src/
 - [x] **Tests**: Device switch state transitions
 
 ### Phase 7: Polish & UX
-- [ ] Keyboard shortcuts help overlay (?)
+- [x] Keyboard shortcuts help overlay (?)
 - [ ] Search/filter conversations
 - [ ] Notification indicator for new messages (unread count)
 - [x] Config file for default device (`~/.config/kdeconnect-sms-tui/config.toml`)

@@ -36,13 +36,14 @@ are saved per-conversation when you switch away.
 | `k` / `Up` | Previous item |
 | `J` / `K` | Page down / page up |
 | `PageDown` / `PageUp` | Page down / page up |
-| `Tab` | Switch focus between panels |
+| `h` / `l` / `Tab` | Switch focus between panels |
 | `Enter` / `i` | Focus compose input |
 | `d` | Open device selector |
 | `g` | Edit group name (conversations panel) |
 | `a` / `s` | Archive / spam selected conversation |
 | `A` / `S` | View archived / spam folder |
 | `r` | Refresh conversations / reconnect |
+| `?` | Show help popup |
 | `q` | Quit |
 
 **Compose** (after pressing Enter/i):
