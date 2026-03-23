@@ -231,9 +231,10 @@ fn format_timestamp(millis: i64) -> String {
 /// Simple time-of-day display from epoch millis.
 fn format_time_of_day(millis: i64) -> String {
     let secs = millis / 1000;
-    let hours = ((secs % 86400) + 86400) % 86400 / 3600;
-    let mins = ((secs % 3600) + 3600) % 3600 / 60;
-    format!("{:02}:{:02}", hours, mins)
+    let time_t = secs as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe { libc::localtime_r(&time_t, &mut tm); }
+    format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
 }
 
 #[cfg(test)]

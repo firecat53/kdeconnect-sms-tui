@@ -22,6 +22,8 @@ enum RenderItem {
         height: u16,
     },
     ImagePlaceholder(Line<'static>),
+    /// A date separator line (not counted as a message for scroll boundaries).
+    DateSeparator(Line<'static>),
 }
 
 impl RenderItem {
@@ -35,6 +37,7 @@ impl RenderItem {
             }
             RenderItem::Image { height, .. } => *height,
             RenderItem::ImagePlaceholder(_) => 1,
+            RenderItem::DateSeparator(_) => 1,
         }
     }
 }
@@ -131,7 +134,19 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         ))]));
     }
 
+    let mut prev_date: Option<String> = None;
+
     for msg in &conv.messages {
+        // Insert a date separator when the date changes between messages.
+        let msg_date = msg.date_display();
+        if prev_date.as_ref() != Some(&msg_date) {
+            items.push(RenderItem::DateSeparator(Line::from(Span::styled(
+                format!("── {} ──", msg_date),
+                theme::timestamp_style(),
+            ))));
+            prev_date = Some(msg_date);
+        }
+
         let sender = if msg.is_incoming() {
             let addr = msg.addresses.first().map(|a| a.address.as_str()).unwrap_or("?");
             app.contacts.display_name(addr)
@@ -217,13 +232,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let total_height: u16 = item_heights.iter().sum();
 
     // Compute per-message heights by grouping render items back to messages.
-    // Each message produces: 1 Text item + N image/placeholder items (one per image attachment).
+    // Each message produces: optional DateSeparator + 1 Text item + N image/placeholder items.
+    // Date separators are folded into the following message's height (they
+    // don't count as a separate message for scroll-boundary purposes).
     // Skip the spinner item at the front if present.
     let mut msg_heights: Vec<u16> = Vec::with_capacity(conv.messages.len());
     {
         let mut item_idx = if conv.loading_more_messages { 1usize } else { 0usize };
         for msg in &conv.messages {
             let mut h: u16 = 0;
+            // Date separator (if present before this message)
+            if item_idx < items.len() && matches!(&items[item_idx], RenderItem::DateSeparator(_)) {
+                h += item_heights[item_idx];
+                item_idx += 1;
+            }
             // Text item
             if item_idx < item_heights.len() {
                 h += item_heights[item_idx];
@@ -339,7 +361,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                     }
                 }
             }
-            RenderItem::ImagePlaceholder(line) => {
+            RenderItem::ImagePlaceholder(line) | RenderItem::DateSeparator(line) => {
                 if item_top >= 0 {
                     let text_area = Rect {
                         x: inner.x,

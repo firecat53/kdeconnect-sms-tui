@@ -1305,6 +1305,7 @@ dependencies = [
  "dirs",
  "futures-lite",
  "image",
+ "libc",
  "libheif-rs",
  "ratatui",
  "ratatui-image",

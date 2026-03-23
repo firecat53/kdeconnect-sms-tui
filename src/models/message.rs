@@ -75,14 +75,33 @@ impl Message {
         !self.attachments.is_empty()
     }
 
-    /// Returns the timestamp as a chrono-free formatted string.
+    /// Returns the time portion as a local-time formatted string (HH:MM).
     pub fn timestamp_display(&self) -> String {
-        // Simple formatting without pulling in chrono
-        let secs = self.date / 1000;
-        let hours = (secs % 86400) / 3600;
-        let mins = (secs % 3600) / 60;
-        format!("{:02}:{:02}", hours, mins)
+        let tm = epoch_millis_to_local(self.date);
+        format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
     }
+
+    /// Returns the date portion as a local-time formatted string (YYYY-MM-DD).
+    pub fn date_display(&self) -> String {
+        let tm = epoch_millis_to_local(self.date);
+        format!(
+            "{:04}-{:02}-{:02}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday
+        )
+    }
+}
+
+/// Convert epoch milliseconds to a local-time `libc::tm` struct.
+fn epoch_millis_to_local(millis: i64) -> libc::tm {
+    let secs = millis / 1000;
+    let time_t = secs as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::localtime_r(&time_t, &mut tm);
+    }
+    tm
 }
 
 #[cfg(test)]
