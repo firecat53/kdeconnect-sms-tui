@@ -52,7 +52,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .conversations
         .iter()
         .enumerate()
-        .filter(|(_, conv)| !app.config.is_hidden(conv.thread_id))
+        .filter(|(_, conv)| !app.state.is_hidden(conv.thread_id))
         .collect();
 
     let items: Vec<ListItem> = visible
@@ -60,7 +60,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .map(|(_, conv)| {
             let name: String = if let Some(n) = conv.display_name.as_deref() {
                 n.to_string()
-            } else if let Some(n) = app.config.group_names.get(&conv.thread_id.to_string()) {
+            } else if let Some(n) = app.state.group_names.get(&conv.thread_id.to_string()) {
                 n.clone()
             } else if conv.is_group {
                 app.generate_group_initials(conv)

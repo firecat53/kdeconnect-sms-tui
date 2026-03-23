@@ -4,6 +4,7 @@ mod contacts;
 mod dbus;
 mod events;
 mod models;
+mod state;
 mod ui;
 
 use clap::Parser;
@@ -64,7 +65,8 @@ async fn main() -> Result<()> {
     }
 
     let config = config::Config::load()?;
+    let state = state::AppState::load()?;
 
-    let mut app = app::App::new(config, args.device, args.name).await?;
+    let mut app = app::App::new(config, state, args.device, args.name).await?;
     app.run().await
 }

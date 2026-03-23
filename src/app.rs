@@ -15,6 +15,7 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::contacts::ContactStore;
+use crate::state::AppState;
 use crate::dbus::conversations::ConversationsClient;
 use crate::dbus::daemon::DaemonClient;
 use crate::dbus::signals;
@@ -76,6 +77,7 @@ pub enum ImageState {
 
 pub struct App {
     pub config: Config,
+    pub state: AppState,
     pub devices: Vec<Device>,
     pub selected_device_idx: Option<usize>,
     pub conversations: Vec<Conversation>,
@@ -143,6 +145,7 @@ pub struct App {
 impl App {
     pub async fn new(
         config: Config,
+        state: AppState,
         device_id: Option<String>,
         device_name: Option<String>,
     ) -> Result<Self> {
@@ -163,6 +166,7 @@ impl App {
 
         let mut app = Self {
             config,
+            state,
             devices: Vec::new(),
             selected_device_idx: None,
             conversations: Vec::new(),
@@ -229,6 +233,7 @@ impl App {
     pub fn new_test() -> Self {
         Self {
             config: Config::default(),
+            state: AppState::default(),
             devices: Vec::new(),
             selected_device_idx: None,
             conversations: Vec::new(),
@@ -670,9 +675,9 @@ impl App {
         let thread_id = msg.thread_id;
 
         // If an incoming message arrives for a hidden conversation, restore it.
-        if msg.is_incoming() && self.config.is_hidden(thread_id) {
-            self.config.unarchive(thread_id);
-            let _ = self.config.save();
+        if msg.is_incoming() && self.state.is_hidden(thread_id) {
+            self.state.unarchive(thread_id);
+            let _ = self.state.save();
         }
 
         // Check if we already have this thread
@@ -702,9 +707,9 @@ impl App {
         let thread_id = msg.thread_id;
 
         // If an incoming message arrives for a hidden conversation, restore it.
-        if msg.is_incoming() && self.config.is_hidden(thread_id) {
-            self.config.unarchive(thread_id);
-            let _ = self.config.save();
+        if msg.is_incoming() && self.state.is_hidden(thread_id) {
+            self.state.unarchive(thread_id);
+            let _ = self.state.save();
         }
 
         if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
@@ -1537,7 +1542,7 @@ impl App {
 
         // Pre-fill with existing custom name, or generate initials
         let existing = self
-            .config
+            .state
             .group_names
             .get(&thread_id.to_string())
             .cloned();
@@ -1560,12 +1565,12 @@ impl App {
                         let tid = conv.thread_id.to_string();
                         let name = self.group_name_input.trim().to_string();
                         if name.is_empty() {
-                            self.config.group_names.remove(&tid);
+                            self.state.group_names.remove(&tid);
                         } else {
-                            self.config.group_names.insert(tid, name);
+                            self.state.group_names.insert(tid, name);
                         }
-                        if let Err(e) = self.config.save() {
-                            self.status_message = Some(format!("Failed to save config: {}", e));
+                        if let Err(e) = self.state.save() {
+                            self.status_message = Some(format!("Failed to save state: {}", e));
                         }
                     }
                 }
@@ -1706,9 +1711,9 @@ impl App {
         let Some(idx) = self.selected_conversation_idx else { return };
         let Some(conv) = self.conversations.get(idx) else { return };
         let thread_id = conv.thread_id;
-        self.config.toggle_archived(thread_id);
-        if let Err(e) = self.config.save() {
-            self.status_message = Some(format!("Failed to save config: {}", e));
+        self.state.toggle_archived(thread_id);
+        if let Err(e) = self.state.save() {
+            self.status_message = Some(format!("Failed to save state: {}", e));
         }
         // Move selection to next visible conversation
         self.adjust_selection_after_hide();
@@ -1718,9 +1723,9 @@ impl App {
         let Some(idx) = self.selected_conversation_idx else { return };
         let Some(conv) = self.conversations.get(idx) else { return };
         let thread_id = conv.thread_id;
-        self.config.toggle_spam(thread_id);
-        if let Err(e) = self.config.save() {
-            self.status_message = Some(format!("Failed to save config: {}", e));
+        self.state.toggle_spam(thread_id);
+        if let Err(e) = self.state.save() {
+            self.status_message = Some(format!("Failed to save state: {}", e));
         }
         self.adjust_selection_after_hide();
     }
@@ -1765,9 +1770,9 @@ impl App {
             KeyCode::Enter => {
                 if let Some(&thread_id) = threads.get(self.folder_popup_idx) {
                     // Restore conversation and select it
-                    self.config.unarchive(thread_id);
-                    if let Err(e) = self.config.save() {
-                        self.status_message = Some(format!("Failed to save config: {}", e));
+                    self.state.unarchive(thread_id);
+                    if let Err(e) = self.state.save() {
+                        self.status_message = Some(format!("Failed to save state: {}", e));
                     }
                     // Select the restored conversation
                     if let Some(pos) = self.conversations.iter().position(|c| c.thread_id == thread_id) {
@@ -1786,8 +1791,8 @@ impl App {
     /// Returns the list of thread_ids for the currently open folder popup.
     pub fn folder_thread_ids(&self) -> Vec<i64> {
         let mut ids = match self.folder_popup_kind {
-            FolderKind::Archive => self.config.archived_threads.clone(),
-            FolderKind::Spam => self.config.spam_threads.clone(),
+            FolderKind::Archive => self.state.archived_threads.clone(),
+            FolderKind::Spam => self.state.spam_threads.clone(),
         };
         // Sort by most recent message first.
         ids.sort_by(|a, b| {
@@ -1805,7 +1810,7 @@ impl App {
         self.conversations
             .iter()
             .enumerate()
-            .filter(|(_, c)| !self.config.is_hidden(c.thread_id))
+            .filter(|(_, c)| !self.state.is_hidden(c.thread_id))
             .map(|(i, _)| i)
             .collect()
     }

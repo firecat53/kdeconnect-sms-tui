@@ -53,7 +53,7 @@ pub fn draw(f: &mut Frame, app: &App) {
                 .and_then(|c| c.display_name.as_deref())
                 .map(|s| s.to_string())
                 .or_else(|| {
-                    app.config
+                    app.state
                         .group_names
                         .get(&tid.to_string())
                         .cloned()
