@@ -237,7 +237,7 @@ src/
 - [x] `replyToConversation()` for sending in existing threads
 - [x] `sendWithoutConversation()` for new messages
 - [x] Scroll through message history (auto-scroll to newest)
-- [ ] Lazy-load older messages on scroll
+- [x] Lazy-load older messages on scroll
 - [x] **Tests**: Message rendering, send/reply flow
 
 ### Phase 4: Images & Attachments
@@ -254,7 +254,7 @@ src/
 
 ### Phase 5: Group Messages & Replies
 - [x] Handle multi-address conversations (group detection via address count)
-- [ ] Display group member list
+- [x] Display group member list
 - [x] Group rename functionality (stored in state file)
 - [ ] Reply context (quote/reference previous message if supported)
 - [x] **Tests**: Group detection
@@ -272,7 +272,7 @@ src/
 - [ ] Notification indicator for new messages (unread count)
 - [x] Config file for default device (`~/.config/kdeconnect-sms-tui/config.toml`)
 - [x] State file for group names, archive/spam lists (`~/.local/state/kdeconnect-sms-tui/state.toml`)
-- [ ] Proper emoji rendering with grapheme cluster awareness
+- [x] Proper emoji rendering with grapheme cluster awareness
 - [ ] Clipboard support for copying message text
 - [x] Archive/spam folders with auto-restore on new incoming messages
 - [x] Panic hook to restore terminal on crash
