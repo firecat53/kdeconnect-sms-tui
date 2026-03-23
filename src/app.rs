@@ -1464,10 +1464,24 @@ impl App {
     }
 }
 
-/// Insert a message into a sorted (by date ascending) list, avoiding duplicates by uid.
+/// Insert a message into a sorted (by date ascending) list, avoiding duplicates.
+///
+/// kdeconnect can deliver the same message multiple times — via both
+/// `conversationCreated` and `conversationUpdated` signals, or via signal
+/// + conversation reload.  The uid may differ between deliveries (e.g. 0
+/// before the phone assigns the real SMS ID), so we use multiple strategies:
+///   1. If the incoming uid > 0 and matches an existing uid → duplicate.
+///   2. Otherwise, match on body + date (same text at the same timestamp).
 fn insert_message_sorted(messages: &mut Vec<Message>, msg: Message) {
-    // Avoid duplicates
-    if messages.iter().any(|m| m.uid == msg.uid && m.date == msg.date) {
+    let dominated = messages.iter().any(|m| {
+        // Exact uid match (when the id is known)
+        if msg.uid != 0 && m.uid == msg.uid {
+            return true;
+        }
+        // Fallback: same body + date (covers uid==0 or mismatched-uid cases)
+        m.date == msg.date && m.body == msg.body
+    });
+    if dominated {
         return;
     }
     let pos = messages.partition_point(|m| m.date <= msg.date);
@@ -1480,6 +1494,7 @@ mod tests {
     use crate::models::message::{Address, MessageType};
 
     fn make_test_message(thread_id: i64, date: i64, body: &str) -> Message {
+        // Use date as uid so each distinct test message gets a unique id
         Message {
             event: 0x1,
             body: body.into(),
@@ -1490,7 +1505,7 @@ mod tests {
             message_type: MessageType::Inbox,
             read: false,
             thread_id,
-            uid: 1,
+            uid: date as i32,
             sub_id: -1,
             attachments: vec![],
         }
@@ -1701,6 +1716,52 @@ mod tests {
         insert_message_sorted(&mut messages, msg); // duplicate
 
         assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn test_insert_message_dedup_different_uid_same_body_date() {
+        // kdeconnect can deliver the same sent message via both
+        // conversationCreated and conversationUpdated signals, with uid=0
+        // in one and the real uid in the other.
+        let mut messages = Vec::new();
+
+        let mut msg1 = make_test_message(1, 1000, "sent msg");
+        msg1.uid = 0; // first signal: uid not yet assigned
+        insert_message_sorted(&mut messages, msg1);
+
+        let mut msg2 = make_test_message(1, 1000, "sent msg");
+        msg2.uid = 42; // second signal: real uid from phone
+        insert_message_sorted(&mut messages, msg2);
+
+        assert_eq!(messages.len(), 1, "same body+date should dedup even with different uids");
+    }
+
+    #[test]
+    fn test_insert_message_dedup_same_uid_nonzero() {
+        // Two signals with the same non-zero uid but different body (e.g. edited)
+        // should still dedup — uid is the authoritative identifier.
+        let mut messages = Vec::new();
+
+        let mut msg1 = make_test_message(1, 1000, "original");
+        msg1.uid = 42;
+        insert_message_sorted(&mut messages, msg1);
+
+        let mut msg2 = make_test_message(1, 1001, "updated");
+        msg2.uid = 42;
+        insert_message_sorted(&mut messages, msg2);
+
+        assert_eq!(messages.len(), 1, "same non-zero uid should dedup");
+    }
+
+    #[test]
+    fn test_insert_message_different_messages_not_deduped() {
+        // Genuinely different messages should not be deduped
+        let mut messages = Vec::new();
+
+        insert_message_sorted(&mut messages, make_test_message(1, 1000, "hello"));
+        insert_message_sorted(&mut messages, make_test_message(1, 2000, "world"));
+
+        assert_eq!(messages.len(), 2);
     }
 
     #[test]
