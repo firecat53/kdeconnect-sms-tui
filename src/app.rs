@@ -102,6 +102,10 @@ pub struct App {
     /// for a short cooldown after sending so the daemon can finish processing
     /// without interference — prevents duplicate delivery.
     last_send_time: Option<std::time::Instant>,
+    /// Request a full terminal repaint on the next draw cycle.
+    /// Set when dismissing overlays (e.g. device popup) that may have
+    /// erased protocol-based images (Kitty/Sixel).
+    pub needs_full_repaint: bool,
 }
 
 impl App {
@@ -155,6 +159,7 @@ impl App {
             tick_count: 0,
             auto_resync_remaining: 0,
             last_send_time: None,
+            needs_full_repaint: false,
         };
 
         app.refresh_devices().await;
@@ -219,6 +224,7 @@ impl App {
             tick_count: 0,
             auto_resync_remaining: 0,
             last_send_time: None,
+            needs_full_repaint: false,
         }
     }
 
@@ -483,6 +489,12 @@ impl App {
         let mut needs_redraw = true;
         while !self.should_quit {
             if needs_redraw {
+                if self.needs_full_repaint {
+                    // Force a complete redraw so protocol-based images
+                    // (Kitty/Sixel) are re-emitted after an overlay erased them.
+                    terminal.clear()?;
+                    self.needs_full_repaint = false;
+                }
                 terminal.draw(|f| {
                     crate::ui::draw(f, self);
                 })?;
@@ -1379,6 +1391,7 @@ impl App {
             // Close popup
             KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('q') => {
                 self.focus = Focus::ConversationList;
+                self.needs_full_repaint = true;
             }
 
             // Navigate
@@ -1401,6 +1414,7 @@ impl App {
                     self.connect_to_device(signal_tx).await;
                 }
                 self.focus = Focus::ConversationList;
+                self.needs_full_repaint = true;
             }
 
             _ => {}
