@@ -27,12 +27,6 @@ impl AppState {
     pub fn load() -> Result<Self> {
         let path = Self::state_path();
         if !path.exists() {
-            // Migrate from old config.toml if state fields exist there.
-            if let Some(migrated) = Self::migrate_from_config() {
-                debug!("Migrated state from config.toml");
-                let _ = migrated.save();
-                return Ok(migrated);
-            }
             debug!("No state file at {:?}, using defaults", path);
             return Ok(Self::default());
         }
@@ -102,29 +96,7 @@ impl AppState {
             .join("state.toml")
     }
 
-    /// Try to migrate group_names/archived_threads/spam_threads from the old
-    /// config.toml location.  Returns Some if any state fields were found.
-    fn migrate_from_config() -> Option<Self> {
-        let config_path = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("~/.config"))
-            .join("kdeconnect-sms-tui")
-            .join("config.toml");
 
-        let content = fs::read_to_string(&config_path).ok()?;
-        let table: toml::Table = toml::from_str(&content).ok()?;
-
-        let has_state = table.contains_key("group_names")
-            || table.contains_key("archived_threads")
-            || table.contains_key("spam_threads");
-
-        if !has_state {
-            return None;
-        }
-
-        // Deserialize as AppState (serde(default) handles missing fields).
-        let state: AppState = toml::from_str(&content).ok()?;
-        Some(state)
-    }
 }
 
 #[cfg(test)]
