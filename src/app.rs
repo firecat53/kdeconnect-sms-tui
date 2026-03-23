@@ -140,10 +140,10 @@ pub struct App {
     /// Set when dismissing overlays (e.g. device popup) that may have
     /// erased protocol-based images (Kitty/Sixel).
     pub needs_full_repaint: bool,
-    /// Set to true after initial conversations have been loaded.  Until then,
-    /// incoming-message signals are considered replayed history and should NOT
+    /// Epoch millis when we connected to the current device.  Messages with
+    /// timestamps older than this are replayed history and should NOT
     /// auto-unarchive hidden threads.
-    initial_load_done: bool,
+    connected_at_ms: i64,
 }
 
 impl App {
@@ -204,7 +204,7 @@ impl App {
             folder_popup_kind: FolderKind::Archive,
             folder_popup_idx: 0,
             needs_full_repaint: false,
-            initial_load_done: false,
+            connected_at_ms: 0,
         };
 
         app.refresh_devices().await;
@@ -275,7 +275,7 @@ impl App {
             folder_popup_kind: FolderKind::Archive,
             folder_popup_idx: 0,
             needs_full_repaint: false,
-            initial_load_done: false,
+            connected_at_ms: 0,
         }
     }
 
@@ -342,6 +342,10 @@ impl App {
         }
 
         self.conversations_client = Some(client);
+        self.connected_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
         self.status_message = Some(format!("Connected to {}", device.name));
         // kdeconnectd progressively discovers messages from the phone across
         // multiple requestAllConversationThreads calls.  Schedule a few
@@ -422,7 +426,7 @@ impl App {
                 }
                 self.sort_conversations();
                 self.loading = LoadingState::Idle;
-                self.initial_load_done = true;
+
                 let count = self.conversations.len();
                 self.status_message = Some(format!("{} conversations loaded", count));
 
@@ -471,7 +475,7 @@ impl App {
                 }
                 self.sort_conversations();
                 self.loading = LoadingState::Idle;
-                self.initial_load_done = true;
+
                 let count = self.conversations.len();
                 self.status_message = Some(format!("{} conversations loaded", count));
 
@@ -683,8 +687,9 @@ impl App {
         let thread_id = msg.thread_id;
 
         // If a genuinely new incoming message arrives for a hidden conversation,
-        // restore it.  Skip during initial load — those are replayed history.
-        if self.initial_load_done && msg.is_incoming() && self.state.is_hidden(thread_id) {
+        // restore it.  Messages older than our connection time are replayed
+        // history from kdeconnectd and should not trigger unarchive.
+        if msg.date > self.connected_at_ms && msg.is_incoming() && self.state.is_hidden(thread_id) {
             self.state.unarchive(thread_id);
             let _ = self.state.save();
         }
@@ -716,8 +721,9 @@ impl App {
         let thread_id = msg.thread_id;
 
         // If a genuinely new incoming message arrives for a hidden conversation,
-        // restore it.  Skip during initial load — those are replayed history.
-        if self.initial_load_done && msg.is_incoming() && self.state.is_hidden(thread_id) {
+        // restore it.  Messages older than our connection time are replayed
+        // history from kdeconnectd and should not trigger unarchive.
+        if msg.date > self.connected_at_ms && msg.is_incoming() && self.state.is_hidden(thread_id) {
             self.state.unarchive(thread_id);
             let _ = self.state.save();
         }
@@ -1541,7 +1547,6 @@ impl App {
         self.compose_input.clear();
         self.compose_cursor = 0;
         self.drafts.clear();
-        self.initial_load_done = false;
     }
 
     // ── Group info popup ────────────────────────────────────────────
