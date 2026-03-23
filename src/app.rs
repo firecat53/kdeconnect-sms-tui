@@ -378,9 +378,6 @@ impl App {
     /// Fetch cached conversations from kdeconnect without requesting a new sync.
     /// Preserves any messages already loaded in existing conversations.
     async fn refresh_cached_conversations(&mut self) {
-        if self.in_send_cooldown() {
-            return;
-        }
         let Some(ref client) = self.conversations_client else {
             return;
         };
@@ -700,6 +697,11 @@ impl App {
 
     /// Load the next page of older messages for the selected conversation.
     fn load_more_messages(&mut self) {
+        // Don't request messages from the phone right after sending —
+        // it can cause the daemon to re-process the outgoing message.
+        if self.in_send_cooldown() {
+            return;
+        }
         let Some(idx) = self.selected_conversation_idx else {
             return;
         };
@@ -811,10 +813,6 @@ impl App {
     /// If the user has scrolled near the top of the message view, or the
     /// viewport isn't full yet, request the next page of older messages.
     fn maybe_load_more_on_scroll(&mut self) {
-        // Don't request more messages right after sending.
-        if self.in_send_cooldown() {
-            return;
-        }
         // If content doesn't fill the viewport, always try to load more.
         if self.message_max_scroll == 0 {
             self.load_more_messages();
