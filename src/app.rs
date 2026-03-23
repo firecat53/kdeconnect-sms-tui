@@ -370,22 +370,28 @@ impl App {
 
     /// Load conversations from the currently connected device.
     async fn load_conversations(&mut self) {
-        let Some(ref client) = self.conversations_client else {
+        if self.conversations_client.is_none() {
             return;
-        };
+        }
 
         self.loading = LoadingState::Loading;
         self.status_message = Some("Loading conversations...".into());
 
         // First request the phone to send all threads
-        if let Err(e) = client.request_all_conversation_threads().await {
+        let request_result = self.conversations_client.as_ref().unwrap()
+            .request_all_conversation_threads().await;
+        if let Err(e) = request_result {
             self.loading = LoadingState::Error(format!("Failed to request threads: {}", e));
             self.status_message = Some(format!("Error: {}", e));
+            // Connection may be stale — drop client so retry can reconnect.
+            self.conversations_client = None;
             return;
         }
 
         // Then fetch what's cached, preserving any loaded messages
-        match client.active_conversations().await {
+        let fetch_result = self.conversations_client.as_ref().unwrap()
+            .active_conversations().await;
+        match fetch_result {
             Ok(convos) => {
                 // Merge new data, preserving messages from existing conversations
                 let mut old_map: HashMap<i64, _> = self
@@ -408,15 +414,18 @@ impl App {
                 let count = self.conversations.len();
                 self.status_message = Some(format!("{} conversations loaded", count));
 
-                // Auto-select first if none selected, and request its messages
+                // Auto-select first visible if none selected, and request its messages
                 if self.selected_conversation_idx.is_none() && !self.conversations.is_empty() {
-                    self.selected_conversation_idx = Some(0);
+                    let first_visible = self.visible_conversation_indices().first().copied();
+                    self.selected_conversation_idx = first_visible;
                     self.request_selected_conversation_messages();
                 }
             }
             Err(e) => {
                 self.loading = LoadingState::Error(format!("Failed to load: {}", e));
                 self.status_message = Some(format!("Error: {}", e));
+                // Connection may be stale — drop client so retry can reconnect.
+                self.conversations_client = None;
             }
         }
     }
@@ -424,11 +433,11 @@ impl App {
     /// Fetch cached conversations from kdeconnect without requesting a new sync.
     /// Preserves any messages already loaded in existing conversations.
     async fn refresh_cached_conversations(&mut self) {
-        let Some(ref client) = self.conversations_client else {
+        if self.conversations_client.is_none() {
             return;
-        };
+        }
 
-        match client.active_conversations().await {
+        match self.conversations_client.as_ref().unwrap().active_conversations().await {
             Ok(new_convos) => {
                 // Merge: preserve messages already loaded in existing conversations
                 for new_conv in new_convos {
@@ -454,12 +463,15 @@ impl App {
                 self.status_message = Some(format!("{} conversations loaded", count));
 
                 if self.selected_conversation_idx.is_none() && !self.conversations.is_empty() {
-                    self.selected_conversation_idx = Some(0);
+                    let first_visible = self.visible_conversation_indices().first().copied();
+                    self.selected_conversation_idx = first_visible;
                     self.request_selected_conversation_messages();
                 }
             }
             Err(e) => {
                 self.status_message = Some(format!("Refresh error: {}", e));
+                // Connection may be stale — drop client so retry can reconnect.
+                self.conversations_client = None;
             }
         }
     }
