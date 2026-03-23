@@ -8,7 +8,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::App;
 use super::theme;
 
-const HELP_TEXT: &str = "Tab:pane  j/k:nav  J/K:page  i:compose  g:info  a/A:archive  s/S:spam  d:devices  r:refresh  q:quit";
+const HELP_TEXT: &str = "Tab:pane  j/k:nav  J/K:page  i:compose  g:group  a/A:archive  s/S:spam  d:devices  r:refresh  q:quit";
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let width = area.width as usize;

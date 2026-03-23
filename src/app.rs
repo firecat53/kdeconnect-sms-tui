@@ -657,6 +657,12 @@ impl App {
     fn handle_conversation_created(&mut self, msg: Message) {
         let thread_id = msg.thread_id;
 
+        // If an incoming message arrives for a hidden conversation, restore it.
+        if msg.is_incoming() && self.config.is_hidden(thread_id) {
+            self.config.unarchive(thread_id);
+            let _ = self.config.save();
+        }
+
         // Check if we already have this thread
         if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
             conv.is_group = conv.is_group || msg.addresses.len() > 2;
@@ -682,6 +688,12 @@ impl App {
     /// Handle a conversation update (new message in existing thread).
     fn handle_conversation_updated(&mut self, msg: Message) {
         let thread_id = msg.thread_id;
+
+        // If an incoming message arrives for a hidden conversation, restore it.
+        if msg.is_incoming() && self.config.is_hidden(thread_id) {
+            self.config.unarchive(thread_id);
+            let _ = self.config.save();
+        }
 
         if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
             let is_newer = conv
@@ -1599,15 +1611,20 @@ impl App {
 
     /// Generate default group name from member initials.
     /// e.g. "Alice Smith, Bob, +15551234" → "AS,B,+"
-    fn generate_group_initials(&self, conv: &Conversation) -> String {
+    pub fn generate_group_initials(&self, conv: &Conversation) -> String {
         let addrs = conv
             .latest_message
             .as_ref()
             .map(|m| &m.addresses[..])
             .unwrap_or(&[]);
 
+        let mut seen = std::collections::HashSet::new();
         let mut entries: Vec<(String, String)> = addrs
             .iter()
+            .filter(|a| {
+                let normalized = crate::contacts::normalize_phone(&a.address);
+                seen.insert(normalized)
+            })
             .map(|a| {
                 let name = self.contacts.display_name(&a.address);
                 let initials = name_to_initials(&name);
@@ -1643,8 +1660,13 @@ impl App {
             .map(|m| &m.addresses[..])
             .unwrap_or(&[]);
 
+        let mut seen = std::collections::HashSet::new();
         let mut members: Vec<(String, String)> = addrs
             .iter()
+            .filter(|a| {
+                let normalized = crate::contacts::normalize_phone(&a.address);
+                seen.insert(normalized)
+            })
             .map(|a| {
                 let name = self.contacts.display_name(&a.address);
                 let phone = a.address.clone();
@@ -1751,10 +1773,19 @@ impl App {
 
     /// Returns the list of thread_ids for the currently open folder popup.
     pub fn folder_thread_ids(&self) -> Vec<i64> {
-        match self.folder_popup_kind {
+        let mut ids = match self.folder_popup_kind {
             FolderKind::Archive => self.config.archived_threads.clone(),
             FolderKind::Spam => self.config.spam_threads.clone(),
-        }
+        };
+        // Sort by most recent message first.
+        ids.sort_by(|a, b| {
+            let date_a = self.conversations.iter().find(|c| c.thread_id == *a)
+                .and_then(|c| c.latest_message.as_ref()).map(|m| m.date).unwrap_or(0);
+            let date_b = self.conversations.iter().find(|c| c.thread_id == *b)
+                .and_then(|c| c.latest_message.as_ref()).map(|m| m.date).unwrap_or(0);
+            date_b.cmp(&date_a)
+        });
+        ids
     }
 
     /// Returns indices of conversations that are not archived or spam.

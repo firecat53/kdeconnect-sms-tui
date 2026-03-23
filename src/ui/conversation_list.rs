@@ -62,6 +62,8 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 n.to_string()
             } else if let Some(n) = app.config.group_names.get(&conv.thread_id.to_string()) {
                 n.clone()
+            } else if conv.is_group {
+                app.generate_group_initials(conv)
             } else {
                 let addr = conv.primary_address().unwrap_or("Unknown");
                 app.contacts.lookup(addr).unwrap_or_else(|| addr.to_string())
