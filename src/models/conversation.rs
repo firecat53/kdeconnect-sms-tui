@@ -23,6 +23,9 @@ pub struct Conversation {
     /// Whether a page of older messages is currently being fetched.
     #[serde(default)]
     pub loading_more_messages: bool,
+    /// Tick counter when loading started, used to detect timeouts.
+    #[serde(skip)]
+    pub loading_started_tick: Option<u32>,
 }
 
 impl Conversation {
@@ -36,6 +39,7 @@ impl Conversation {
             messages_requested: 0,
             total_messages: None,
             loading_more_messages: false,
+            loading_started_tick: None,
         }
     }
 
@@ -104,6 +108,7 @@ mod tests {
             messages_requested: 0,
             total_messages: None,
             loading_more_messages: false,
+            loading_started_tick: None,
         }
     }
 

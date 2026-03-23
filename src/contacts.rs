@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,9 @@ use tracing::{debug, warn};
 pub struct ContactStore {
     /// Normalized phone number → display name
     contacts: HashMap<String, String>,
+    /// Cache for lookup results so suffix matching only runs once per number.
+    /// Maps normalized phone → Some(name) or None (no match).
+    lookup_cache: RefCell<HashMap<String, Option<String>>>,
 }
 
 impl ContactStore {
@@ -20,6 +24,7 @@ impl ContactStore {
             debug!("vCard directory does not exist: {:?}", vcard_dir);
             return Ok(Self {
                 contacts: HashMap::new(),
+                lookup_cache: RefCell::new(HashMap::new()),
             });
         }
         Self::load_from_dir(&vcard_dir)
@@ -33,7 +38,10 @@ impl ContactStore {
         let mut contacts = HashMap::new();
         Self::load_vcards_recursive(dir, &mut contacts);
         debug!("Loaded {} contacts from {:?}", contacts.len(), dir);
-        Ok(Self { contacts })
+        Ok(Self {
+            contacts,
+            lookup_cache: RefCell::new(HashMap::new()),
+        })
     }
 
     fn load_vcards_recursive(dir: &Path, contacts: &mut HashMap<String, String>) {
@@ -69,12 +77,24 @@ impl ContactStore {
     /// Tries an exact normalized match first, then falls back to suffix
     /// matching (last 10 digits) to handle country-code mismatches — e.g.
     /// vCard stores `+15551234567` but kdeconnect sends `5551234567`.
-    pub fn lookup(&self, phone: &str) -> Option<&str> {
+    pub fn lookup(&self, phone: &str) -> Option<String> {
         let normalized = normalize_phone(phone);
+
+        // Check cache first to avoid repeated suffix scans on every render.
+        {
+            let cache = self.lookup_cache.borrow();
+            if let Some(cached) = cache.get(&normalized) {
+                return cached.clone();
+            }
+        }
 
         // Exact match
         if let Some(name) = self.contacts.get(&normalized) {
-            return Some(name.as_str());
+            let result = Some(name.clone());
+            self.lookup_cache
+                .borrow_mut()
+                .insert(normalized, result.clone());
+            return result;
         }
 
         // Suffix match: compare last 10 digits (covers US/CA numbers without
@@ -87,7 +107,11 @@ impl ContactStore {
                         "Contact suffix match: '{}' matched stored '{}' -> '{}'",
                         phone, stored, name
                     );
-                    return Some(name.as_str());
+                    let result = Some(name.clone());
+                    self.lookup_cache
+                        .borrow_mut()
+                        .insert(normalized, result.clone());
+                    return result;
                 }
             }
         }
@@ -98,14 +122,13 @@ impl ContactStore {
             normalized,
             self.contacts.len()
         );
+        self.lookup_cache.borrow_mut().insert(normalized, None);
         None
     }
 
     /// Get display name or fall back to the phone number.
     pub fn display_name(&self, phone: &str) -> String {
-        self.lookup(phone)
-            .unwrap_or(phone)
-            .to_string()
+        self.lookup(phone).unwrap_or_else(|| phone.to_string())
     }
 
     pub fn len(&self) -> usize {
@@ -248,7 +271,7 @@ END:VCARD
 
         let store = ContactStore::load_from_dir(dir.path()).unwrap();
         assert_eq!(store.len(), 3);
-        assert_eq!(store.lookup("+15551234567"), Some("Alice Smith"));
+        assert_eq!(store.lookup("+15551234567").as_deref(), Some("Alice Smith"));
         assert_eq!(store.display_name("+15551234567"), "Alice Smith");
         assert_eq!(store.display_name("+19999999999"), "+19999999999");
     }
@@ -286,7 +309,7 @@ END:VCARD
 
         let store = ContactStore::load_from_dir(dir.path()).unwrap();
         assert_eq!(store.len(), 3);
-        assert_eq!(store.lookup("+15551234567"), Some("Alice Smith"));
+        assert_eq!(store.lookup("+15551234567").as_deref(), Some("Alice Smith"));
     }
 
     #[test]
@@ -299,16 +322,16 @@ END:VCARD
         let store = ContactStore::load_from_dir(dir.path()).unwrap();
 
         // Exact match
-        assert_eq!(store.lookup("+15551234567"), Some("Alice Smith"));
+        assert_eq!(store.lookup("+15551234567").as_deref(), Some("Alice Smith"));
 
         // Missing country code — should still match via suffix
-        assert_eq!(store.lookup("5551234567"), Some("Alice Smith"));
+        assert_eq!(store.lookup("5551234567").as_deref(), Some("Alice Smith"));
 
         // With formatting — should still match
-        assert_eq!(store.lookup("(555) 123-4567"), Some("Alice Smith"));
+        assert_eq!(store.lookup("(555) 123-4567").as_deref(), Some("Alice Smith"));
 
         // UK number without + prefix
-        assert_eq!(store.lookup("442071234567"), Some("Bob Jones"));
+        assert_eq!(store.lookup("442071234567").as_deref(), Some("Bob Jones"));
 
         // No match at all
         assert_eq!(store.lookup("9999999999"), None);

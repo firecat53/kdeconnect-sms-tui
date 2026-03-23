@@ -50,20 +50,14 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .conversations
         .iter()
         .map(|conv| {
-            let name = conv
-                .display_name
-                .as_deref()
-                .or_else(|| {
-                    app.config
-                        .group_names
-                        .get(&conv.thread_id.to_string())
-                        .map(|s| s.as_str())
-                })
-                .or_else(|| {
-                    conv.primary_address()
-                        .and_then(|addr| app.contacts.lookup(addr))
-                })
-                .unwrap_or_else(|| conv.primary_address().unwrap_or("Unknown"));
+            let name: String = if let Some(n) = conv.display_name.as_deref() {
+                n.to_string()
+            } else if let Some(n) = app.config.group_names.get(&conv.thread_id.to_string()) {
+                n.clone()
+            } else {
+                let addr = conv.primary_address().unwrap_or("Unknown");
+                app.contacts.lookup(addr).unwrap_or_else(|| addr.to_string())
+            };
 
             let is_unread = conv
                 .latest_message
@@ -300,6 +294,7 @@ mod tests {
             messages_requested: 0,
             total_messages: None,
             loading_more_messages: false,
+            loading_started_tick: None,
         });
 
         let backend = TestBackend::new(40, 10);
@@ -327,6 +322,7 @@ mod tests {
             messages_requested: 0,
             total_messages: None,
             loading_more_messages: false,
+            loading_started_tick: None,
         });
 
         let backend = TestBackend::new(40, 10);

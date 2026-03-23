@@ -524,6 +524,7 @@ impl App {
             AppEvent::Resize(_, _) => {}
             AppEvent::Tick => {
                 self.tick_count = self.tick_count.wrapping_add(1);
+                self.reset_stale_loading_flags();
                 self.retry_connection_if_needed(signal_tx.clone()).await;
                 self.retry_message_loading_if_needed().await;
             }
@@ -560,6 +561,7 @@ impl App {
                     }
                     conv.total_messages = Some(message_count);
                     conv.loading_more_messages = false;
+                    conv.loading_started_tick = None;
                 }
                 // Phone finished sending data — only fetch cached results.
                 // Do NOT call request_all_conversation_threads() here or it
@@ -711,6 +713,10 @@ impl App {
         if !conv.has_more_messages() {
             return;
         }
+        // Don't fire another request while one is already in flight.
+        if conv.loading_more_messages {
+            return;
+        }
         let Some(ref client) = self.conversations_client else {
             return;
         };
@@ -720,6 +726,7 @@ impl App {
         let end = start + Self::MESSAGE_PAGE_SIZE;
         conv.messages_requested = end;
         conv.loading_more_messages = true;
+        conv.loading_started_tick = Some(self.tick_count);
 
         let connection = client.connection().clone();
         let device_id = client.device_id().to_owned();
@@ -832,6 +839,30 @@ impl App {
         self.selected_conversation_idx
             .and_then(|i| self.conversations.get(i))
             .is_some_and(|c| c.loading_more_messages)
+    }
+
+    /// Reset `loading_more_messages` if the flag has been stuck for too long
+    /// (the `conversationLoaded` signal never arrived).  40 ticks ≈ 10 seconds.
+    fn reset_stale_loading_flags(&mut self) {
+        const LOADING_TIMEOUT_TICKS: u32 = 40;
+        let current = self.tick_count;
+        for conv in &mut self.conversations {
+            if conv.loading_more_messages {
+                if let Some(started) = conv.loading_started_tick {
+                    if current.wrapping_sub(started) >= LOADING_TIMEOUT_TICKS {
+                        tracing::warn!(
+                            "Loading timeout for thread {} — resetting",
+                            conv.thread_id
+                        );
+                        conv.loading_more_messages = false;
+                        conv.loading_started_tick = None;
+                    }
+                } else {
+                    // Flag set but no tick recorded (e.g. restored from cache) — clear it.
+                    conv.loading_more_messages = false;
+                }
+            }
+        }
     }
 
     /// Handle a conversation being removed.

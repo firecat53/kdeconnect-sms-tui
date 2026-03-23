@@ -418,6 +418,7 @@ mod tests {
             messages_requested: 0,
             total_messages: None,
             loading_more_messages: false,
+            loading_started_tick: None,
         });
         app.selected_conversation_idx = Some(0);
 
@@ -448,6 +449,7 @@ mod tests {
             messages_requested: 0,
             total_messages: None,
             loading_more_messages: false,
+            loading_started_tick: None,
         });
         app.selected_conversation_idx = Some(0);
 
@@ -477,6 +479,7 @@ mod tests {
             messages_requested: 0,
             total_messages: None,
             loading_more_messages: false,
+            loading_started_tick: None,
         });
         app.selected_conversation_idx = Some(0);
 
@@ -525,6 +528,7 @@ mod tests {
             messages_requested: 0,
             total_messages: None,
             loading_more_messages: false,
+            loading_started_tick: None,
         });
         app.selected_conversation_idx = Some(0);
 
