@@ -1,4 +1,4 @@
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -41,14 +41,12 @@ enum RenderItem {
     },
     /// A date separator line (not selectable).
     DateSeparator(Line<'static>),
-    /// Loading spinner (not selectable).
-    Spinner(Vec<Line<'static>>),
 }
 
 impl RenderItem {
     fn height(&self, width: u16) -> u16 {
         match self {
-            RenderItem::Text { lines, .. } | RenderItem::Spinner(lines) => {
+            RenderItem::Text { lines, .. } => {
                 if width == 0 {
                     return lines.len() as u16;
                 }
@@ -67,7 +65,7 @@ impl RenderItem {
             | RenderItem::Image { sel, .. }
             | RenderItem::ImagePlaceholder { sel, .. }
             | RenderItem::AttachmentLabel { sel, .. } => Some(*sel),
-            RenderItem::DateSeparator(_) | RenderItem::Spinner(_) => None,
+            RenderItem::DateSeparator(_) => None,
         }
     }
 }
@@ -109,11 +107,28 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         theme::inactive_border()
     };
 
-    let block = Block::default()
+    // Show animated loading indicator in the block title when fetching older messages.
+    let loading_title = app
+        .selected_conversation_idx
+        .and_then(|i| app.conversations.get(i))
+        .filter(|c| c.loading_more_messages)
+        .map(|_| {
+            let frame = SPINNER_FRAMES[app.tick_count as usize % SPINNER_FRAMES.len()];
+            Line::from(Span::styled(
+                format!(" {} Loading older messages... ", frame),
+                theme::help_style(),
+            ))
+        });
+
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .title(" Messages ")
         .title_style(if is_active { theme::title_style() } else { theme::help_style() })
         .border_style(border_style);
+
+    if let Some(loading) = loading_title {
+        block = block.title_bottom(loading).title_alignment(Alignment::Center);
+    }
 
     // No conversation selected
     let selected = app.selected_conversation_idx.and_then(|i| app.conversations.get(i));
@@ -143,15 +158,6 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Build render items from messages
     let mut items: Vec<RenderItem> = Vec::new();
-
-    // Show animated spinner at the top when loading older messages
-    if conv.loading_more_messages {
-        let frame = SPINNER_FRAMES[app.tick_count as usize % SPINNER_FRAMES.len()];
-        items.push(RenderItem::Spinner(vec![Line::from(Span::styled(
-            format!(" {} Loading older messages...", frame),
-            theme::help_style(),
-        ))]));
-    }
 
     let mut prev_date: Option<String> = None;
 
@@ -254,7 +260,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     // Compute per-message heights for scroll boundaries
     let mut msg_heights: Vec<u16> = Vec::with_capacity(conv.messages.len());
     {
-        let mut item_idx = if conv.loading_more_messages { 1usize } else { 0usize };
+        let mut item_idx = 0usize;
         for msg in &conv.messages {
             let mut h: u16 = 0;
             // Date separator (if present before this message)
@@ -484,22 +490,6 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                         height: 1.min(available),
                     };
                     let paragraph = Paragraph::new(line.clone());
-                    f.render_widget(paragraph, text_area);
-                }
-            }
-            RenderItem::Spinner(lines) => {
-                let skip = if item_top < 0 { (-item_top) as u16 } else { 0 };
-                let visible_height = item_height.saturating_sub(skip).min(available);
-                if visible_height > 0 {
-                    let text_area = Rect {
-                        x: inner.x,
-                        y: inner.y + render_y,
-                        width: inner_width,
-                        height: visible_height,
-                    };
-                    let paragraph = Paragraph::new(lines.clone())
-                        .wrap(Wrap { trim: false })
-                        .scroll((skip, 0));
                     f.render_widget(paragraph, text_area);
                 }
             }
