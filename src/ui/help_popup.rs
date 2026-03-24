@@ -31,10 +31,11 @@ const HELP_ENTRIES: &[(&str, &str)] = &[
 pub fn draw(f: &mut Frame) {
     let area = f.area();
 
-    // Size the popup to fit content
+    // Size the popup to fit content: key column is padded to 20 chars
+    let key_col_width = 20;
     let content_width = HELP_ENTRIES
         .iter()
-        .map(|(k, d)| k.len() + d.len() + 4) // key + separator + desc
+        .map(|(_, d)| key_col_width + d.len())
         .max()
         .unwrap_or(40) as u16;
     let popup_width = (content_width + 4).min(area.width.saturating_sub(4)).max(30);
