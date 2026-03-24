@@ -1408,15 +1408,19 @@ impl App {
                 self.select_message_down();
             }
 
-            // Page scrolling
+            // Page scrolling — move selection by roughly one page of messages
             KeyCode::PageUp | KeyCode::Char('K') => {
-                let page = self.message_view_height.max(1);
-                self.message_scroll = self.message_scroll.saturating_add(page);
+                let steps = (self.message_view_height / 3).max(3) as usize;
+                for _ in 0..steps {
+                    self.select_message_up();
+                }
                 self.maybe_load_more_on_scroll();
             }
             KeyCode::PageDown | KeyCode::Char('J') => {
-                let page = self.message_view_height.max(1);
-                self.message_scroll = self.message_scroll.saturating_sub(page);
+                let steps = (self.message_view_height / 3).max(3) as usize;
+                for _ in 0..steps {
+                    self.select_message_down();
+                }
             }
 
             // Enter: open selected attachment with xdg-open
