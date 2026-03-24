@@ -716,6 +716,11 @@ impl App {
         }
 
         // Check if we already have this thread
+        let is_selected = self
+            .selected_conversation_idx
+            .and_then(|i| self.conversations.get(i))
+            .is_some_and(|c| c.thread_id == thread_id);
+
         if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
             conv.is_group = conv.is_group || msg.addresses.len() > 2;
             let is_newer = conv
@@ -725,7 +730,16 @@ impl App {
             if is_newer {
                 conv.latest_message = Some(msg.clone());
             }
-            insert_message_sorted(&mut conv.messages, msg);
+            if let Some(pos) = insert_message_sorted(&mut conv.messages, msg) {
+                // If a message was inserted before the selected index, shift it
+                if is_selected {
+                    if let Some(ref mut sel) = self.selected_message_idx {
+                        if pos <= *sel {
+                            *sel += 1;
+                        }
+                    }
+                }
+            }
         } else {
             let mut conv = Conversation::new(thread_id);
             conv.is_group = msg.addresses.len() > 2;
@@ -749,6 +763,11 @@ impl App {
             let _ = self.state.save();
         }
 
+        let is_selected = self
+            .selected_conversation_idx
+            .and_then(|i| self.conversations.get(i))
+            .is_some_and(|c| c.thread_id == thread_id);
+
         if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
             let is_newer = conv
                 .latest_message
@@ -757,7 +776,15 @@ impl App {
             if is_newer {
                 conv.latest_message = Some(msg.clone());
             }
-            insert_message_sorted(&mut conv.messages, msg);
+            if let Some(pos) = insert_message_sorted(&mut conv.messages, msg) {
+                if is_selected {
+                    if let Some(ref mut sel) = self.selected_message_idx {
+                        if pos <= *sel {
+                            *sel += 1;
+                        }
+                    }
+                }
+            }
         } else {
             // New thread we didn't know about
             self.handle_conversation_created(msg);
@@ -953,6 +980,18 @@ impl App {
         let threshold = self.message_view_height.max(1);
         if self.message_scroll >= self.message_max_scroll.saturating_sub(threshold) {
             self.load_more_messages();
+            return;
+        }
+        // Also trigger loading when the selection is near the oldest loaded
+        // message.  PageUp moves the selection without directly updating
+        // message_scroll (the renderer adjusts scroll to follow selection),
+        // so we need to check the selection position as well.
+        let msg_count = self.selected_conversation_messages_len();
+        if let Some(sel) = self.selected_message_idx {
+            // Within ~10 messages of the oldest → preload
+            if msg_count > 0 && sel < 10 {
+                self.load_more_messages();
+            }
         }
     }
 
@@ -1284,6 +1323,8 @@ impl App {
             // Switch focus to messages panel
             KeyCode::Tab | KeyCode::Char('l') => {
                 self.focus = Focus::MessageView;
+                self.message_scroll = 0;
+                self.reset_message_selection();
             }
 
             // Help popup
@@ -2310,7 +2351,9 @@ fn clipboard_copy_image(path: &std::path::Path) {
 ///   1. If the incoming uid > 0 and matches an existing uid → duplicate.
 ///   2. Same body + date within 5 seconds → duplicate (covers uid==0,
 ///      mismatched-uid, and MMS timestamp drift).
-fn insert_message_sorted(messages: &mut Vec<Message>, msg: Message) {
+/// Insert a message and return the insertion index, or `None` if it was a
+/// duplicate.
+fn insert_message_sorted(messages: &mut Vec<Message>, msg: Message) -> Option<usize> {
     // 5 seconds in milliseconds — kdeconnect timestamps are in epoch ms.
     const TIMESTAMP_FUZZ_MS: i64 = 5_000;
 
@@ -2323,10 +2366,11 @@ fn insert_message_sorted(messages: &mut Vec<Message>, msg: Message) {
         m.body == msg.body && (m.date - msg.date).abs() <= TIMESTAMP_FUZZ_MS
     });
     if dominated {
-        return;
+        return None;
     }
     let pos = messages.partition_point(|m| m.date <= msg.date);
     messages.insert(pos, msg);
+    Some(pos)
 }
 
 #[cfg(test)]
