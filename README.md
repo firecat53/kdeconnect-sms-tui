@@ -11,6 +11,16 @@ kdeconnect-sms-tui
 
 Requires a paired Android device running the KDE Connect app, and `kdeconnectd` running on your machine.
 
+### Optional dependencies
+
+For clipboard support (`c` key to copy messages/attachments):
+
+| Platform | Tool |
+|----------|------|
+| Linux (Wayland) | `wl-copy` (from `wl-clipboard`) |
+| Linux (X11) | `xclip` or `xsel` |
+| macOS | `pbcopy` (built-in) |
+
 ## Usage
 
 ```
@@ -38,7 +48,7 @@ are saved per-conversation when you switch away.
 | `PageDown` / `PageUp` | Page down / page up |
 | `h` / `l` / `Tab` | Switch focus between panels |
 | `i` | Focus compose input |
-| `Enter` | Compose (on text) / open attachment with xdg-open |
+| `Enter` | Open selected attachment (xdg-open) |
 | `c` | Copy message text or attachment to clipboard |
 | `d` | Open device selector |
 | `g` | Edit group name (conversations panel) |

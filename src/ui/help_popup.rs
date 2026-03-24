@@ -12,7 +12,7 @@ const HELP_ENTRIES: &[(&str, &str)] = &[
     ("J/K, PgDn/PgUp", "Page down / page up"),
     ("h/l, Tab", "Switch panel (conversations / messages)"),
     ("i", "Compose message"),
-    ("Enter", "Compose (on text) / open attachment"),
+    ("Enter", "Open selected attachment (xdg-open)"),
     ("c", "Copy message text or attachment"),
     ("Esc", "Cancel / back to previous panel"),
     ("", ""),

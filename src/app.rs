@@ -1419,14 +1419,9 @@ impl App {
                 self.message_scroll = self.message_scroll.saturating_sub(page);
             }
 
-            // Enter: open attachment with xdg-open, or compose if on text
+            // Enter: open selected attachment with xdg-open
             KeyCode::Enter => {
-                if self.try_open_selected_attachment() {
-                    // Opened attachment — don't enter compose
-                } else if self.selected_conversation_idx.is_some() {
-                    self.pre_compose_focus = Focus::MessageView;
-                    self.focus = Focus::Compose;
-                }
+                self.try_open_selected_attachment();
             }
 
             // 'i' always enters compose
@@ -2167,25 +2162,88 @@ impl App {
     }
 }
 
-/// Copy text to the system clipboard using xclip or xsel.
-fn clipboard_copy_text(text: &str) {
-    use std::io::Write;
-    // Try xclip first, then xsel
-    let result = std::process::Command::new("xclip")
-        .args(["-selection", "clipboard"])
-        .stdin(std::process::Stdio::piped())
+/// Detected clipboard backend.
+enum ClipboardBackend {
+    /// macOS pbcopy/pbpaste
+    Pbcopy,
+    /// Wayland wl-copy
+    WlCopy,
+    /// X11 xclip
+    Xclip,
+    /// X11 xsel (fallback)
+    Xsel,
+}
+
+/// Detect the appropriate clipboard backend for the current platform/session.
+fn detect_clipboard() -> Option<ClipboardBackend> {
+    // macOS
+    if cfg!(target_os = "macos") {
+        return Some(ClipboardBackend::Pbcopy);
+    }
+
+    // Wayland: XDG_SESSION_TYPE=wayland or WAYLAND_DISPLAY is set
+    if std::env::var("WAYLAND_DISPLAY").is_ok()
+        || std::env::var("XDG_SESSION_TYPE").ok().as_deref() == Some("wayland")
+    {
+        return Some(ClipboardBackend::WlCopy);
+    }
+
+    // X11: try xclip first, then xsel
+    if std::process::Command::new("xclip")
+        .arg("-version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn()
-        .or_else(|_| {
-            std::process::Command::new("xsel")
-                .arg("--clipboard")
-                .arg("--input")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-        });
+        .status()
+        .is_ok()
+    {
+        return Some(ClipboardBackend::Xclip);
+    }
+
+    if std::process::Command::new("xsel")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
+    {
+        return Some(ClipboardBackend::Xsel);
+    }
+
+    None
+}
+
+/// Copy text to the system clipboard.
+fn clipboard_copy_text(text: &str) {
+    use std::io::Write;
+
+    let Some(backend) = detect_clipboard() else {
+        return;
+    };
+
+    let result = match backend {
+        ClipboardBackend::Pbcopy => std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn(),
+        ClipboardBackend::WlCopy => std::process::Command::new("wl-copy")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn(),
+        ClipboardBackend::Xclip => std::process::Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn(),
+        ClipboardBackend::Xsel => std::process::Command::new("xsel")
+            .args(["--clipboard", "--input"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn(),
+    };
 
     if let Ok(mut child) = result {
         if let Some(ref mut stdin) = child.stdin {
@@ -2195,20 +2253,46 @@ fn clipboard_copy_text(text: &str) {
     }
 }
 
-/// Copy an image file to the system clipboard using xclip.
+/// Copy an image file to the system clipboard.
 fn clipboard_copy_image(path: &std::path::Path) {
+    let Some(backend) = detect_clipboard() else {
+        return;
+    };
+
     let mime = if path.extension().and_then(|e| e.to_str()) == Some("png") {
         "image/png"
     } else {
         "image/jpeg"
     };
-    let _ = std::process::Command::new("xclip")
-        .args(["-selection", "clipboard", "-t", mime, "-i"])
-        .arg(path)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+
+    let _ = match backend {
+        ClipboardBackend::Pbcopy => {
+            // macOS: pbcopy doesn't support images directly; copy the path instead
+            clipboard_copy_text(&path.display().to_string());
+            return;
+        }
+        ClipboardBackend::WlCopy => std::process::Command::new("wl-copy")
+            .args(["--type", mime])
+            .stdin(std::fs::File::open(path).ok().map_or(
+                std::process::Stdio::null(),
+                std::process::Stdio::from,
+            ))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status(),
+        ClipboardBackend::Xclip => std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", mime, "-i"])
+            .arg(path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status(),
+        ClipboardBackend::Xsel => {
+            // xsel doesn't support binary clipboard; copy the path instead
+            clipboard_copy_text(&path.display().to_string());
+            return;
+        }
+    };
 }
 
 /// Insert a message into a sorted (by date ascending) list, avoiding duplicates.
