@@ -389,6 +389,12 @@ impl App {
         if self.conversations_client.is_none() {
             return;
         }
+        // Don't hit the phone right after sending — it can cause the
+        // Android kdeconnect plugin to re-send the outgoing message.
+        if self.in_send_cooldown() {
+            self.status_message = Some("Waiting for send to complete...".into());
+            return;
+        }
 
         self.loading = LoadingState::Loading;
         self.status_message = Some("Loading conversations...".into());
@@ -494,12 +500,15 @@ impl App {
         }
     }
 
-    /// Post-send cooldown period.  After sending a message we suppress daemon
-    /// polling (requestConversation, activeConversations, requestAllConversation-
-    /// Threads) for this duration so the daemon can finish processing the send
-    /// without interference from our requests.  This prevents duplicate delivery
-    /// that occurs when aggressive polling hits the daemon mid-send.
-    const SEND_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+    /// Post-send cooldown period.  After sending a message we suppress all
+    /// phone-facing daemon requests (requestConversation,
+    /// requestAllConversationThreads) for this duration so the Android side
+    /// can finish processing the outgoing message.  The kdeconnect-android
+    /// SMS plugin has no deduplication — if a conversation sync request
+    /// arrives while the sent message is still being processed, the content
+    /// observer can trigger the SMS library to re-send the message.
+    /// 15 seconds covers even slow MMS delivery.
+    const SEND_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(15);
 
     /// Returns `true` if we recently sent a message and should avoid daemon requests.
     fn in_send_cooldown(&self) -> bool {
@@ -758,6 +767,10 @@ impl App {
     const AUTO_RESYNC_MAX: u8 = 5;
 
     fn request_selected_conversation_messages(&mut self) {
+        // Don't request messages from the phone right after sending.
+        if self.in_send_cooldown() {
+            return;
+        }
         let Some(idx) = self.selected_conversation_idx else {
             return;
         };
