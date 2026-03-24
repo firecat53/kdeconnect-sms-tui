@@ -32,12 +32,14 @@ are saved per-conversation when you switch away.
 
 | Key | Action |
 |-----|--------|
-| `j` / `Down` | Next item (conversation or message) |
+| `j` / `Down` | Next item (conversation or message/attachment) |
 | `k` / `Up` | Previous item |
 | `J` / `K` | Page down / page up |
 | `PageDown` / `PageUp` | Page down / page up |
 | `h` / `l` / `Tab` | Switch focus between panels |
-| `Enter` / `i` | Focus compose input |
+| `i` | Focus compose input |
+| `Enter` | Compose (on text) / open attachment with xdg-open |
+| `c` | Copy message text or attachment to clipboard |
 | `d` | Open device selector |
 | `g` | Edit group name (conversations panel) |
 | `a` / `s` | Archive / spam selected conversation |

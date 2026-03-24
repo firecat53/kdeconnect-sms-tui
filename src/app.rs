@@ -20,6 +20,7 @@ use crate::dbus::conversations::ConversationsClient;
 use crate::dbus::daemon::DaemonClient;
 use crate::dbus::signals;
 use crate::events::{self, AppEvent};
+use crate::models::attachment::Attachment;
 use crate::models::conversation::{sort_by_recent, Conversation};
 use crate::models::device::Device;
 use crate::models::message::Message;
@@ -92,6 +93,12 @@ pub struct App {
     /// Message boundary offsets for message-by-message scrolling (set during render).
     /// Each entry is the cumulative height (from bottom) at the top of that message.
     pub message_boundaries: Vec<u16>,
+    /// Index of the currently selected message within the conversation's message list.
+    /// `None` when no message is selected (e.g. empty conversation).
+    pub selected_message_idx: Option<usize>,
+    /// Which part of the selected message is highlighted:
+    /// 0 = the text body, 1..N = attachment index (0-based) within that message.
+    pub selected_message_part: usize,
     pub should_quit: bool,
     pub loading: LoadingState,
     pub status_message: Option<String>,
@@ -181,6 +188,8 @@ impl App {
             message_view_height: 0,
             message_max_scroll: 0,
             message_boundaries: Vec::new(),
+            selected_message_idx: None,
+            selected_message_part: 0,
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
@@ -252,6 +261,8 @@ impl App {
             message_view_height: 0,
             message_max_scroll: 0,
             message_boundaries: Vec::new(),
+            selected_message_idx: None,
+            selected_message_part: 0,
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
@@ -1388,13 +1399,13 @@ impl App {
                 self.focus = Focus::HelpPopup;
             }
 
-            // Message-by-message scrolling (up = older)
+            // Message-by-message selection (up = older)
             KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll_message_up();
+                self.select_message_up();
                 self.maybe_load_more_on_scroll();
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll_message_down();
+                self.select_message_down();
             }
 
             // Page scrolling
@@ -1408,12 +1419,27 @@ impl App {
                 self.message_scroll = self.message_scroll.saturating_sub(page);
             }
 
-            // Enter compose
-            KeyCode::Enter | KeyCode::Char('i') => {
+            // Enter: open attachment with xdg-open, or compose if on text
+            KeyCode::Enter => {
+                if self.try_open_selected_attachment() {
+                    // Opened attachment — don't enter compose
+                } else if self.selected_conversation_idx.is_some() {
+                    self.pre_compose_focus = Focus::MessageView;
+                    self.focus = Focus::Compose;
+                }
+            }
+
+            // 'i' always enters compose
+            KeyCode::Char('i') => {
                 if self.selected_conversation_idx.is_some() {
                     self.pre_compose_focus = Focus::MessageView;
                     self.focus = Focus::Compose;
                 }
+            }
+
+            // Copy selected message/attachment to clipboard
+            KeyCode::Char('c') => {
+                self.copy_selected_to_clipboard();
             }
 
             // Device popup
@@ -1572,6 +1598,8 @@ impl App {
         self.selected_conversation_idx = None;
         self.conversations_client = None;
         self.message_scroll = 0;
+        self.selected_message_idx = None;
+        self.selected_message_part = 0;
         self.focus = Focus::ConversationList;
         self.compose_input.clear();
         self.compose_cursor = 0;
@@ -1823,6 +1851,7 @@ impl App {
                     if let Some(pos) = self.conversations.iter().position(|c| c.thread_id == thread_id) {
                         self.selected_conversation_idx = Some(pos);
                         self.message_scroll = 0;
+                        self.reset_message_selection();
                         self.request_selected_conversation_messages();
                     }
                     self.focus = Focus::ConversationList;
@@ -1861,39 +1890,95 @@ impl App {
     }
 
     /// Scroll up (toward older messages) by one message boundary.
-    fn scroll_message_up(&mut self) {
-        // message_boundaries is sorted ascending.
-        // Find the next boundary strictly above current scroll position.
-        if let Some(&next) = self.message_boundaries.iter().find(|&&b| b > self.message_scroll) {
-            let step = next - self.message_scroll;
-            if step > self.message_view_height {
-                // Message is taller than viewport — scroll one page at a time.
-                self.message_scroll = self.message_scroll.saturating_add(self.message_view_height);
-            } else {
-                self.message_scroll = next;
-            }
-        }
-        // If no boundary above, we're already at/past the oldest — do nothing
-        // (max_scroll clamp in render will hold position).
+    /// Number of selectable parts for a message: 1 (text) + N (attachments).
+    fn message_part_count(msg: &Message) -> usize {
+        1 + msg.attachments.len()
     }
 
-    /// Scroll down (toward newer messages) by one message boundary.
-    fn scroll_message_down(&mut self) {
-        if self.message_scroll == 0 {
+    /// Move selection up (toward older messages / previous parts).
+    fn select_message_up(&mut self) {
+        let msg_count = self.selected_conversation_messages_len();
+        if msg_count == 0 {
             return;
         }
-        // Find the next boundary strictly below current scroll position.
-        if let Some(&prev) = self.message_boundaries.iter().rev().find(|&&b| b < self.message_scroll) {
-            let step = self.message_scroll - prev;
-            if step > self.message_view_height {
-                self.message_scroll = self.message_scroll.saturating_sub(self.message_view_height);
-            } else {
-                self.message_scroll = prev;
+
+        match self.selected_message_idx {
+            None => {
+                // Nothing selected — select the newest message's last part
+                let idx = msg_count - 1;
+                self.selected_message_idx = Some(idx);
+                let parts = self.conversation_message_part_count(idx);
+                self.selected_message_part = parts.saturating_sub(1);
             }
-        } else {
-            // Below all boundaries, snap to 0 (newest at bottom).
-            self.message_scroll = 0;
+            Some(idx) => {
+                if self.selected_message_part > 0 {
+                    // Move to previous part of same message
+                    self.selected_message_part -= 1;
+                } else if idx > 0 {
+                    // Move to previous message (last part)
+                    let new_idx = idx - 1;
+                    self.selected_message_idx = Some(new_idx);
+                    let parts = self.conversation_message_part_count(new_idx);
+                    self.selected_message_part = parts.saturating_sub(1);
+                }
+                // else: already at oldest message, part 0 — do nothing
+            }
         }
+    }
+
+    /// Move selection down (toward newer messages / next parts).
+    fn select_message_down(&mut self) {
+        let msg_count = self.selected_conversation_messages_len();
+        if msg_count == 0 {
+            return;
+        }
+
+        match self.selected_message_idx {
+            None => {
+                // Nothing selected — select newest message text
+                self.selected_message_idx = Some(msg_count - 1);
+                self.selected_message_part = 0;
+            }
+            Some(idx) => {
+                let parts = self.conversation_message_part_count(idx);
+                if self.selected_message_part + 1 < parts {
+                    // Move to next part of same message
+                    self.selected_message_part += 1;
+                } else if idx + 1 < msg_count {
+                    // Move to next message (text part)
+                    self.selected_message_idx = Some(idx + 1);
+                    self.selected_message_part = 0;
+                }
+                // else: already at newest message, last part — do nothing
+            }
+        }
+    }
+
+    /// Reset message selection to the newest message (text part).
+    fn reset_message_selection(&mut self) {
+        let count = self.selected_conversation_messages_len();
+        if count > 0 {
+            self.selected_message_idx = Some(count - 1);
+            self.selected_message_part = 0;
+        } else {
+            self.selected_message_idx = None;
+            self.selected_message_part = 0;
+        }
+    }
+
+    fn selected_conversation_messages_len(&self) -> usize {
+        self.selected_conversation_idx
+            .and_then(|i| self.conversations.get(i))
+            .map(|c| c.messages.len())
+            .unwrap_or(0)
+    }
+
+    fn conversation_message_part_count(&self, msg_idx: usize) -> usize {
+        self.selected_conversation_idx
+            .and_then(|i| self.conversations.get(i))
+            .and_then(|c| c.messages.get(msg_idx))
+            .map(|m| Self::message_part_count(m))
+            .unwrap_or(1)
     }
 
     /// Save current compose input as a draft for the current conversation.
@@ -1974,6 +2059,7 @@ impl App {
         };
         self.selected_conversation_idx = Some(new_idx);
         self.message_scroll = 0;
+        self.reset_message_selection();
     }
 
     fn select_next_conversation(&mut self) {
@@ -1988,7 +2074,141 @@ impl App {
         };
         self.selected_conversation_idx = Some(new_idx);
         self.message_scroll = 0;
+        self.reset_message_selection();
     }
+
+    /// Get the currently selected message and its attachment (if part > 0).
+    fn selected_message_and_attachment(&self) -> Option<(&Message, Option<&Attachment>)> {
+        let msg_idx = self.selected_message_idx?;
+        let conv_idx = self.selected_conversation_idx?;
+        let conv = self.conversations.get(conv_idx)?;
+        let msg = conv.messages.get(msg_idx)?;
+        if self.selected_message_part == 0 {
+            Some((msg, None))
+        } else {
+            let att = msg.attachments.get(self.selected_message_part - 1);
+            Some((msg, att))
+        }
+    }
+
+    /// Open the selected attachment with xdg-open. Returns true if an
+    /// attachment was opened (so the caller can skip enter-to-compose).
+    fn try_open_selected_attachment(&mut self) -> bool {
+        // Extract the cached path before mutating self.
+        let cached_path = self.selected_message_and_attachment()
+            .and_then(|(_, att)| att)
+            .and_then(|att| att.cached_path.clone());
+
+        // If selection is on text (part 0), not an attachment
+        if self.selected_message_part == 0 {
+            return false;
+        }
+
+        if let Some(path) = cached_path {
+            if path.exists() {
+                tokio::spawn(async move {
+                    let _ = tokio::process::Command::new("xdg-open")
+                        .arg(&path)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                });
+                self.status_message = Some("Opening attachment...".into());
+                return true;
+            }
+        }
+        self.status_message = Some("Attachment not downloaded yet".into());
+        true // still an attachment, just not cached — don't fall through to compose
+    }
+
+    /// Copy the selected message text or attachment to the clipboard.
+    fn copy_selected_to_clipboard(&mut self) {
+        // Extract what we need before mutating self.
+        let info = self.selected_message_and_attachment().map(|(msg, att)| {
+            (
+                msg.body.clone(),
+                att.map(|a| (a.mime_type.clone(), a.is_image(), a.cached_path.clone())),
+            )
+        });
+        let Some((body, att_info)) = info else {
+            return;
+        };
+        match att_info {
+            None => {
+                clipboard_copy_text(&body);
+                self.status_message = Some("Message copied".into());
+            }
+            Some((mime, is_image, cached_path)) => {
+                if let Some(path) = cached_path {
+                    if path.exists() {
+                        if mime.starts_with("text/") {
+                            if let Ok(text) = std::fs::read_to_string(&path) {
+                                clipboard_copy_text(&text);
+                                self.status_message = Some("Attachment text copied".into());
+                            } else {
+                                self.status_message = Some("Failed to read attachment".into());
+                            }
+                        } else if is_image {
+                            clipboard_copy_image(&path);
+                            self.status_message = Some("Image copied to clipboard".into());
+                        } else {
+                            clipboard_copy_text(&path.display().to_string());
+                            self.status_message = Some("Attachment path copied".into());
+                        }
+                    } else {
+                        self.status_message = Some("Attachment not downloaded yet".into());
+                    }
+                } else {
+                    self.status_message = Some("Attachment not downloaded yet".into());
+                }
+            }
+        }
+    }
+}
+
+/// Copy text to the system clipboard using xclip or xsel.
+fn clipboard_copy_text(text: &str) {
+    use std::io::Write;
+    // Try xclip first, then xsel
+    let result = std::process::Command::new("xclip")
+        .args(["-selection", "clipboard"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .or_else(|_| {
+            std::process::Command::new("xsel")
+                .arg("--clipboard")
+                .arg("--input")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        });
+
+    if let Ok(mut child) = result {
+        if let Some(ref mut stdin) = child.stdin {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
+    }
+}
+
+/// Copy an image file to the system clipboard using xclip.
+fn clipboard_copy_image(path: &std::path::Path) {
+    let mime = if path.extension().and_then(|e| e.to_str()) == Some("png") {
+        "image/png"
+    } else {
+        "image/jpeg"
+    };
+    let _ = std::process::Command::new("xclip")
+        .args(["-selection", "clipboard", "-t", mime, "-i"])
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 /// Insert a message into a sorted (by date ascending) list, avoiding duplicates.
@@ -2522,62 +2742,105 @@ mod tests {
     }
 
     #[test]
-    fn test_message_scroll_boundaries() {
+    fn test_message_selection_navigation() {
         let mut app = App::new_test();
-        // Set up boundaries as if computed by render
-        app.message_boundaries = vec![5, 12, 20];
-        app.message_view_height = 10;
-        app.message_scroll = 0;
+        app.conversations = vec![Conversation {
+            thread_id: 1,
+            latest_message: None,
+            messages: vec![
+                make_test_message(1, 1000, "msg1"),
+                make_test_message(1, 2000, "msg2"),
+                make_test_message(1, 3000, "msg3"),
+            ],
+            is_group: false,
+            display_name: None,
+            messages_requested: 0,
+            total_messages: None,
+            loading_more_messages: false,
+            loading_started_tick: None,
+        }];
+        app.selected_conversation_idx = Some(0);
 
-        // Scroll up: should snap to first boundary
-        app.scroll_message_up();
-        assert_eq!(app.message_scroll, 5);
+        // Initially no selection
+        assert_eq!(app.selected_message_idx, None);
 
-        // Scroll up again: next boundary
-        app.scroll_message_up();
-        assert_eq!(app.message_scroll, 12);
+        // First select_message_down should select newest (idx 2)
+        app.select_message_down();
+        assert_eq!(app.selected_message_idx, Some(2));
+        assert_eq!(app.selected_message_part, 0);
 
-        // Scroll down: back to previous boundary
-        app.scroll_message_down();
-        assert_eq!(app.message_scroll, 5);
+        // select_message_up from newest goes to idx 1
+        app.select_message_up();
+        assert_eq!(app.selected_message_idx, Some(1));
+        assert_eq!(app.selected_message_part, 0);
 
-        // Scroll down again: back to 0
-        app.scroll_message_down();
-        assert_eq!(app.message_scroll, 0);
+        // Up again to idx 0
+        app.select_message_up();
+        assert_eq!(app.selected_message_idx, Some(0));
+
+        // Up at oldest — stays
+        app.select_message_up();
+        assert_eq!(app.selected_message_idx, Some(0));
+
+        // Down goes back to idx 1
+        app.select_message_down();
+        assert_eq!(app.selected_message_idx, Some(1));
     }
 
     #[test]
-    fn test_message_scroll_large_message() {
+    fn test_message_selection_with_attachments() {
+        use crate::models::attachment::Attachment;
         let mut app = App::new_test();
-        // Boundary at 25 means a message is 25 rows tall, viewport is 10
-        app.message_boundaries = vec![25];
-        app.message_view_height = 10;
-        app.message_scroll = 0;
+        let mut msg = make_test_message(1, 1000, "has attachment");
+        msg.attachments.push(Attachment {
+            part_id: 1,
+            mime_type: "image/jpeg".into(),
+            unique_identifier: "att1".into(),
+            cached_path: None,
+        });
+        app.conversations = vec![Conversation {
+            thread_id: 1,
+            latest_message: None,
+            messages: vec![msg],
+            is_group: false,
+            display_name: None,
+            messages_requested: 0,
+            total_messages: None,
+            loading_more_messages: false,
+            loading_started_tick: None,
+        }];
+        app.selected_conversation_idx = Some(0);
 
-        // Scroll up: step to boundary is 25, > viewport, so scroll by page
-        app.scroll_message_up();
-        assert_eq!(app.message_scroll, 10);
+        // Select newest message text (part 0)
+        app.select_message_down();
+        assert_eq!(app.selected_message_idx, Some(0));
+        assert_eq!(app.selected_message_part, 0);
 
-        // Scroll up again: still within the large message
-        app.scroll_message_up();
-        assert_eq!(app.message_scroll, 20);
+        // Down goes to attachment (part 1)
+        app.select_message_down();
+        assert_eq!(app.selected_message_idx, Some(0));
+        assert_eq!(app.selected_message_part, 1);
 
-        // Scroll up again: now step to 25 is only 5, <= viewport, so snap
-        app.scroll_message_up();
-        assert_eq!(app.message_scroll, 25);
+        // Down at last part of last message — stays
+        app.select_message_down();
+        assert_eq!(app.selected_message_part, 1);
+
+        // Up goes back to text
+        app.select_message_up();
+        assert_eq!(app.selected_message_part, 0);
     }
 
     #[test]
-    fn test_message_scroll_no_boundaries() {
+    fn test_message_selection_empty_conversation() {
         let mut app = App::new_test();
-        // When all messages fit in viewport, no boundaries
-        app.message_boundaries = vec![];
-        app.message_view_height = 20;
-        app.message_scroll = 0;
+        app.conversations = vec![Conversation::new(1)];
+        app.selected_conversation_idx = Some(0);
 
-        // Scroll up does nothing (no boundary above)
-        app.scroll_message_up();
-        assert_eq!(app.message_scroll, 0);
+        app.select_message_up();
+        assert_eq!(app.selected_message_idx, None);
+
+        app.select_message_down();
+        assert_eq!(app.selected_message_idx, None);
     }
 
     #[test]

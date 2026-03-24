@@ -8,10 +8,12 @@ use super::theme;
 
 /// Key binding entries: (key, description)
 const HELP_ENTRIES: &[(&str, &str)] = &[
-    ("j/k, Up/Down", "Navigate items"),
+    ("j/k, Up/Down", "Navigate items / select message"),
     ("J/K, PgDn/PgUp", "Page down / page up"),
     ("h/l, Tab", "Switch panel (conversations / messages)"),
-    ("Enter, i", "Compose message"),
+    ("i", "Compose message"),
+    ("Enter", "Compose (on text) / open attachment"),
+    ("c", "Copy message text or attachment"),
     ("Esc", "Cancel / back to previous panel"),
     ("", ""),
     ("d", "Open device selector"),

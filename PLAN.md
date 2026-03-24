@@ -274,7 +274,9 @@ src/
 - [x] Config file for default device (`~/.config/kdeconnect-sms-tui/config.toml`)
 - [x] State file for group names, archive/spam lists (`~/.local/state/kdeconnect-sms-tui/state.toml`)
 - [x] Proper emoji rendering with grapheme cluster awareness
-- [ ] Clipboard support for copying message text
+- [x] Clipboard support for copying message text/attachments (`c` key)
+- [x] Message-level selection with highlighted scrolling (j/k navigates messages and attachments)
+- [x] Open attachments with xdg-open (`Enter` on attachment)
 - [x] Archive/spam folders with auto-restore on new incoming messages
 - [x] Panic hook to restore terminal on crash
 - [x] Safe string truncation (char-boundary-aware)
