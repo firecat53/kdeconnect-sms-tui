@@ -4,7 +4,7 @@ use std::time::Duration;
 use color_eyre::Result;
 use tokio::time::timeout;
 use tracing::{debug, info};
-use zbus::zvariant::{OwnedValue, Structure, Value};
+use zbus::zvariant::{OwnedValue, Value};
 use zbus::Connection;
 
 use crate::dbus::types::parse_message_from_value;
@@ -114,18 +114,18 @@ impl ConversationsClient {
     }
 
     /// Reply to an existing conversation thread.
-    /// If `attachment` is `Some((mime_type, base64_data))`, it is sent as an MMS attachment.
+    /// If `attachment_url` is provided, it should be a `file://` URL pointing to the image.
+    /// KDE Connect handles reading and encoding the file internally.
     pub async fn reply_to_conversation(
         &self,
         thread_id: i64,
         message: &str,
-        attachment: Option<(&str, &str)>,
+        attachment_url: Option<&str>,
     ) -> Result<()> {
-        // QVariantList maps to D-Bus type `av` (array of variants)
-        let attachments: Vec<Value<'_>> = if let Some((mime, data)) = attachment {
-            vec![Value::from(Structure::from((0i64, mime.to_string(), data.to_string(), String::new())))]
-        } else {
-            Vec::new()
+        // QVariantList of string URLs — kdeconnect reads/encodes files itself
+        let attachments: Vec<Value<'_>> = match attachment_url {
+            Some(url) => vec![Value::from(url.to_string())],
+            None => Vec::new(),
         };
         timeout(DBUS_TIMEOUT, self.connection
             .call_method(
@@ -142,18 +142,17 @@ impl ConversationsClient {
     }
 
     /// Send a message to a new conversation (by address).
-    /// If `attachment` is `Some((mime_type, base64_data))`, it is sent as an MMS attachment.
+    /// If `attachment_url` is provided, it should be a `file://` URL pointing to the image.
     pub async fn send_without_conversation(
         &self,
         addresses: &[String],
         message: &str,
-        attachment: Option<(&str, &str)>,
+        attachment_url: Option<&str>,
     ) -> Result<()> {
-        // QVariantList maps to D-Bus type `av` (array of variants)
-        let attachments: Vec<Value<'_>> = if let Some((mime, data)) = attachment {
-            vec![Value::from(Structure::from((0i64, mime.to_string(), data.to_string(), String::new())))]
-        } else {
-            Vec::new()
+        // QVariantList of string URLs — kdeconnect reads/encodes files itself
+        let attachments: Vec<Value<'_>> = match attachment_url {
+            Some(url) => vec![Value::from(url.to_string())],
+            None => Vec::new(),
         };
         timeout(DBUS_TIMEOUT, self.connection
             .call_method(

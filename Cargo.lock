@@ -1299,7 +1299,6 @@ dependencies = [
 name = "kdeconnect-sms-tui"
 version = "0.1.0"
 dependencies = [
- "base64",
  "clap",
  "color-eyre",
  "crossterm",

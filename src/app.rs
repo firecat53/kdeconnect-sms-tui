@@ -2141,8 +2141,6 @@ impl App {
 
     /// Send the current compose input as a reply, optionally with an image attachment.
     async fn send_message(&mut self) {
-        use base64::Engine;
-
         let text = self.compose_input.trim().to_string();
         if text.is_empty() && self.pending_attachment.is_none() {
             return;
@@ -2162,24 +2160,10 @@ impl App {
 
         let thread_id = conv.thread_id;
 
-        // Encode attachment if present
-        let attachment_data = if let Some((ref path, ref mime)) = self.pending_attachment {
-            match std::fs::read(path) {
-                Ok(bytes) => {
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                    Some((mime.clone(), b64))
-                }
-                Err(e) => {
-                    self.status_message = Some(format!("Failed to read attachment: {}", e));
-                    return;
-                }
-            }
-        } else {
-            None
-        };
-
-        let attachment_arg = attachment_data.as_ref()
-            .map(|(mime, data)| (mime.as_str(), data.as_str()));
+        // Build file:// URL for the attachment if present
+        let file_url = self.pending_attachment.as_ref()
+            .map(|(path, _mime)| format!("file://{}", path.display()));
+        let attachment_arg = file_url.as_deref();
 
         match client.reply_to_conversation(thread_id, &text, attachment_arg).await {
             Ok(()) => {
