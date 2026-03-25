@@ -2134,15 +2134,19 @@ impl App {
     /// Open the selected attachment with xdg-open. Returns true if an
     /// attachment was opened (so the caller can skip enter-to-compose).
     fn try_open_selected_attachment(&mut self) -> bool {
-        // Extract the cached path before mutating self.
-        let cached_path = self.selected_message_and_attachment()
-            .and_then(|(_, att)| att)
-            .and_then(|att| att.cached_path.clone());
-
         // If selection is on text (part 0), not an attachment
         if self.selected_message_part == 0 {
             return false;
         }
+
+        // Extract info before mutating self.
+        let att_info = self.selected_message_and_attachment()
+            .and_then(|(_, att)| att)
+            .map(|att| (att.cached_path.clone(), att.is_image(), att.mime_type.clone()));
+
+        let Some((cached_path, is_image, mime_type)) = att_info else {
+            return true;
+        };
 
         if let Some(path) = cached_path {
             if path.exists() {
@@ -2158,7 +2162,15 @@ impl App {
                 return true;
             }
         }
-        self.status_message = Some("Attachment not downloaded yet".into());
+
+        if !is_image {
+            self.status_message = Some(format!(
+                "Non-image attachments ({}) are not supported by kdeconnectd",
+                mime_type
+            ));
+        } else {
+            self.status_message = Some("Attachment not downloaded yet".into());
+        }
         true // still an attachment, just not cached — don't fall through to compose
     }
 
@@ -2196,9 +2208,19 @@ impl App {
                             clipboard_copy_text(&path.display().to_string());
                             self.status_message = Some("Attachment path copied".into());
                         }
+                    } else if !is_image {
+                        self.status_message = Some(format!(
+                            "Non-image attachments ({}) are not supported by kdeconnectd",
+                            mime
+                        ));
                     } else {
                         self.status_message = Some("Attachment not downloaded yet".into());
                     }
+                } else if !is_image {
+                    self.status_message = Some(format!(
+                        "Non-image attachments ({}) are not supported by kdeconnectd",
+                        mime
+                    ));
                 } else {
                     self.status_message = Some("Attachment not downloaded yet".into());
                 }

@@ -1,5 +1,5 @@
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::Color;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
@@ -363,9 +363,6 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         -(scroll_offset as i32)
     };
 
-    // Highlight style for selected items
-    let highlight_style = Style::default().bg(Color::DarkGray);
-
     // Render visible items
     let mut y: i32 = content_start;
 
@@ -433,24 +430,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                         width: inner_width.min(40),
                         height: *height,
                     };
-                    if is_selected {
-                        // Draw a highlight border indicator for images
-                        // (can't bg-fill protocol images, so use a marker)
-                        let marker_area = Rect {
-                            x: inner.x,
-                            y: inner.y + render_y,
-                            width: inner_width,
-                            height: 1,
-                        };
-                        let marker = Paragraph::new(Line::from(Span::styled(
-                            "▶ ",
-                            highlight_style,
-                        )));
-                        f.render_widget(marker, marker_area);
-                    }
                     if let Some(ImageState::Loaded(protocol)) = app.image_states.get_mut(uid) {
                         let image_widget = StatefulImage::<ratatui_image::protocol::StatefulProtocol>::default();
                         f.render_stateful_widget(image_widget, img_area, protocol.as_mut());
+                    }
+                    if is_selected {
+                        // Draw a selection indicator after the image renders
+                        // so it doesn't get overwritten.  Use a left-edge bar
+                        // on each row of the image.
+                        for row in img_area.y..img_area.y + img_area.height {
+                            if let Some(cell) = f.buffer_mut().cell_mut((inner.x, row)) {
+                                cell.set_symbol("▌");
+                                cell.set_fg(Color::Cyan);
+                            }
+                        }
                     }
                 }
             }
@@ -473,9 +466,12 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                     let paragraph = Paragraph::new(line.clone());
                     f.render_widget(paragraph, text_area);
                     if is_selected {
+                        // Re-apply bg and override fg for contrast
+                        // (help_style uses DarkGray fg which is invisible on DarkGray bg)
                         for col in text_area.x..text_area.x + text_area.width {
                             if let Some(cell) = f.buffer_mut().cell_mut((col, text_area.y)) {
                                 cell.set_bg(Color::DarkGray);
+                                cell.set_fg(Color::White);
                             }
                         }
                     }
