@@ -114,17 +114,17 @@ impl ConversationsClient {
     }
 
     /// Reply to an existing conversation thread.
-    /// If `attachment_url` is provided, it should be a `file://` URL pointing to the image.
-    /// KDE Connect handles reading and encoding the file internally.
+    /// If `attachment_path` is provided, it should be an absolute local file path.
+    /// KDE Connect reads, encodes, and detects the MIME type internally.
     pub async fn reply_to_conversation(
         &self,
         thread_id: i64,
         message: &str,
-        attachment_url: Option<&str>,
+        attachment_path: Option<&str>,
     ) -> Result<()> {
-        // QVariantList of string URLs — kdeconnect reads/encodes files itself
-        let attachments: Vec<Value<'_>> = match attachment_url {
-            Some(url) => vec![Value::from(url.to_string())],
+        // QVariantList of local file path strings — kdeconnect reads/encodes files itself
+        let attachments: Vec<Value<'_>> = match attachment_path {
+            Some(path) => vec![Value::from(path.to_string())],
             None => Vec::new(),
         };
         timeout(DBUS_TIMEOUT, self.connection
@@ -142,16 +142,16 @@ impl ConversationsClient {
     }
 
     /// Send a message to a new conversation (by address).
-    /// If `attachment_url` is provided, it should be a `file://` URL pointing to the image.
+    /// If `attachment_path` is provided, it should be an absolute local file path.
     pub async fn send_without_conversation(
         &self,
         addresses: &[String],
         message: &str,
-        attachment_url: Option<&str>,
+        attachment_path: Option<&str>,
     ) -> Result<()> {
-        // QVariantList of string URLs — kdeconnect reads/encodes files itself
-        let attachments: Vec<Value<'_>> = match attachment_url {
-            Some(url) => vec![Value::from(url.to_string())],
+        // QVariantList of local file path strings — kdeconnect reads/encodes files itself
+        let attachments: Vec<Value<'_>> = match attachment_path {
+            Some(path) => vec![Value::from(path.to_string())],
             None => Vec::new(),
         };
         timeout(DBUS_TIMEOUT, self.connection

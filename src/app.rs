@@ -2160,10 +2160,11 @@ impl App {
 
         let thread_id = conv.thread_id;
 
-        // Build file:// URL for the attachment if present
-        let file_url = self.pending_attachment.as_ref()
-            .map(|(path, _mime)| format!("file://{}", path.display()));
-        let attachment_arg = file_url.as_deref();
+        // Pass the local file path for the attachment (not a file:// URL).
+        // KDE Connect's sendSms expects local paths via QVariant<QString>.
+        let file_path_str = self.pending_attachment.as_ref()
+            .map(|(path, _mime)| path.display().to_string());
+        let attachment_arg = file_path_str.as_deref();
 
         match client.reply_to_conversation(thread_id, &text, attachment_arg).await {
             Ok(()) => {
