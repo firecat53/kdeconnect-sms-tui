@@ -1,12 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use ratatui_image::picker::Picker;
@@ -15,7 +19,6 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::contacts::ContactStore;
-use crate::state::AppState;
 use crate::dbus::conversations::ConversationsClient;
 use crate::dbus::daemon::DaemonClient;
 use crate::dbus::signals;
@@ -24,6 +27,7 @@ use crate::models::attachment::Attachment;
 use crate::models::conversation::{sort_by_recent, Conversation};
 use crate::models::device::Device;
 use crate::models::message::Message;
+use crate::state::AppState;
 
 /// Extract initials from a display name.
 /// "Alice Smith" → "AS", "Bob" → "B", "+15551234" → "+"
@@ -31,7 +35,11 @@ fn name_to_initials(name: &str) -> String {
     let parts: Vec<&str> = name.split_whitespace().collect();
     match parts.len() {
         0 => String::new(),
-        1 => parts[0].chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default(),
+        1 => parts[0]
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_default(),
         _ => {
             let first = parts[0].chars().next().unwrap_or(' ');
             let last = parts.last().unwrap().chars().next().unwrap_or(' ');
@@ -132,11 +140,14 @@ pub struct App {
     /// calls, so we automatically repeat the request a few times after
     /// connecting to a device.
     auto_resync_remaining: u8,
-    /// Instant of last successful send.  Used to suppress daemon polling
+    /// Instant when send protection most recently started.  Used to suppress daemon polling
     /// (requestConversation, activeConversations, requestAllConversationThreads)
     /// for a short cooldown after sending so the daemon can finish processing
     /// without interference — prevents duplicate delivery.
     last_send_time: Option<std::time::Instant>,
+    /// Monotonic generation for phone-facing background requests.  Incrementing
+    /// this invalidates already-queued sync tasks before they touch kdeconnectd.
+    phone_request_epoch: Arc<AtomicU64>,
     /// Group info popup: text input for editing the group name
     pub group_name_input: String,
     /// Cursor byte offset in group_name_input
@@ -218,6 +229,7 @@ impl App {
             tick_count: 0,
             auto_resync_remaining: 0,
             last_send_time: None,
+            phone_request_epoch: Arc::new(AtomicU64::new(0)),
             group_name_input: String::new(),
             group_name_cursor: 0,
             folder_popup_kind: FolderKind::Archive,
@@ -239,8 +251,7 @@ impl App {
                 .await
             {
                 Ok(Some(dev)) => {
-                    app.selected_device_idx =
-                        app.devices.iter().position(|d| d.id == dev.id);
+                    app.selected_device_idx = app.devices.iter().position(|d| d.id == dev.id);
                 }
                 Ok(None) => {
                     app.status_message = Some("No reachable device found".into());
@@ -267,9 +278,7 @@ impl App {
             conversations: Vec::new(),
             selected_conversation_idx: None,
             contacts: ContactStore::load_from_dir(std::path::Path::new("/nonexistent"))
-                .unwrap_or_else(|_| {
-                    ContactStore::load_from_dir(&std::env::temp_dir()).unwrap()
-                }),
+                .unwrap_or_else(|_| ContactStore::load_from_dir(&std::env::temp_dir()).unwrap()),
             message_scroll: 0,
             message_view_height: 0,
             message_max_scroll: 0,
@@ -295,6 +304,7 @@ impl App {
             tick_count: 0,
             auto_resync_remaining: 0,
             last_send_time: None,
+            phone_request_epoch: Arc::new(AtomicU64::new(0)),
             group_name_input: String::new(),
             group_name_cursor: 0,
             folder_popup_kind: FolderKind::Archive,
@@ -341,10 +351,7 @@ impl App {
             return;
         };
 
-        let client = ConversationsClient::new(
-            daemon.connection().clone(),
-            device.id.clone(),
-        );
+        let client = ConversationsClient::new(daemon.connection().clone(), device.id.clone());
 
         // Cancel previous signal listener (if any) before starting a new one.
         // Without this, switching devices or reconnecting accumulates listeners
@@ -360,7 +367,9 @@ impl App {
             daemon.connection().clone(),
             device.id.clone(),
             signal_tx,
-        ).await {
+        )
+        .await
+        {
             Ok(handle) => {
                 self.signal_listener_handle = Some(handle);
             }
@@ -428,8 +437,12 @@ impl App {
         self.status_message = Some("Loading conversations...".into());
 
         // First request the phone to send all threads
-        let request_result = self.conversations_client.as_ref().unwrap()
-            .request_all_conversation_threads().await;
+        let request_result = self
+            .conversations_client
+            .as_ref()
+            .unwrap()
+            .request_all_conversation_threads()
+            .await;
         if let Err(e) = request_result {
             self.loading = LoadingState::Error(format!("Failed to request threads: {}", e));
             self.status_message = Some(format!("Error: {}", e));
@@ -439,8 +452,12 @@ impl App {
         }
 
         // Then fetch what's cached, preserving any loaded messages
-        let fetch_result = self.conversations_client.as_ref().unwrap()
-            .active_conversations().await;
+        let fetch_result = self
+            .conversations_client
+            .as_ref()
+            .unwrap()
+            .active_conversations()
+            .await;
         match fetch_result {
             Ok(convos) => {
                 // Merge new data, preserving messages from existing conversations
@@ -487,12 +504,25 @@ impl App {
         if self.conversations_client.is_none() {
             return;
         }
+        if self.in_send_cooldown() {
+            return;
+        }
 
-        match self.conversations_client.as_ref().unwrap().active_conversations().await {
+        match self
+            .conversations_client
+            .as_ref()
+            .unwrap()
+            .active_conversations()
+            .await
+        {
             Ok(new_convos) => {
                 // Merge: preserve messages already loaded in existing conversations
                 for new_conv in new_convos {
-                    if let Some(existing) = self.conversations.iter_mut().find(|c| c.thread_id == new_conv.thread_id) {
+                    if let Some(existing) = self
+                        .conversations
+                        .iter_mut()
+                        .find(|c| c.thread_id == new_conv.thread_id)
+                    {
                         // Update metadata but keep loaded messages
                         existing.is_group = new_conv.is_group;
                         if let Some(ref new_latest) = new_conv.latest_message {
@@ -542,6 +572,24 @@ impl App {
     fn in_send_cooldown(&self) -> bool {
         self.last_send_time
             .is_some_and(|t| t.elapsed() < Self::SEND_COOLDOWN)
+    }
+
+    fn current_phone_request_epoch(&self) -> u64 {
+        self.phone_request_epoch.load(Ordering::Relaxed)
+    }
+
+    /// Start the send-protection window immediately, before awaiting the
+    /// outbound D-Bus call.  This invalidates already-queued sync tasks and
+    /// prevents new background requests from racing the outgoing message.
+    fn begin_send_protection(&mut self) {
+        self.last_send_time = Some(std::time::Instant::now());
+        self.auto_resync_remaining = 0;
+        self.phone_request_epoch.fetch_add(1, Ordering::Relaxed);
+
+        for conv in &mut self.conversations {
+            conv.loading_more_messages = false;
+            conv.loading_started_tick = None;
+        }
     }
 
     pub fn selected_device(&self) -> Option<&Device> {
@@ -665,7 +713,11 @@ impl App {
             }
             AppEvent::ConversationLoaded(thread_id, message_count) => {
                 // Record the total message count so pagination knows when to stop.
-                if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
+                if let Some(conv) = self
+                    .conversations
+                    .iter_mut()
+                    .find(|c| c.thread_id == thread_id)
+                {
                     // When kdeconnectd discovers more messages (total increases),
                     // reset messages_requested to what we actually have so that
                     // has_more_messages() returns true and load_more_messages()
@@ -682,13 +734,20 @@ impl App {
                     conv.loading_more_messages = false;
                     conv.loading_started_tick = None;
                 }
-                // Phone finished sending data — only fetch cached results.
+                // Phone finished sending data — only fetch cached results,
+                // and skip even that during the post-send protection window.
                 // Do NOT call request_all_conversation_threads() here or it
                 // creates an infinite loop (request → signal → request → …).
-                self.refresh_cached_conversations().await;
+                if !self.in_send_cooldown() {
+                    self.refresh_cached_conversations().await;
+                }
                 // If the selected conversation's viewport isn't full, load more.
                 if let Some(idx) = self.selected_conversation_idx {
-                    if self.conversations.get(idx).is_some_and(|c| c.thread_id == thread_id) {
+                    if self
+                        .conversations
+                        .get(idx)
+                        .is_some_and(|c| c.thread_id == thread_id)
+                    {
                         self.maybe_load_more_on_scroll();
                     }
                 }
@@ -738,7 +797,11 @@ impl App {
             .and_then(|i| self.conversations.get(i))
             .is_some_and(|c| c.thread_id == thread_id);
 
-        if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
+        if let Some(conv) = self
+            .conversations
+            .iter_mut()
+            .find(|c| c.thread_id == thread_id)
+        {
             conv.is_group = conv.is_group || msg.addresses.len() > 2;
             let is_newer = conv
                 .latest_message
@@ -785,7 +848,11 @@ impl App {
             .and_then(|i| self.conversations.get(i))
             .is_some_and(|c| c.thread_id == thread_id);
 
-        if let Some(conv) = self.conversations.iter_mut().find(|c| c.thread_id == thread_id) {
+        if let Some(conv) = self
+            .conversations
+            .iter_mut()
+            .find(|c| c.thread_id == thread_id)
+        {
             let is_newer = conv
                 .latest_message
                 .as_ref()
@@ -850,9 +917,18 @@ impl App {
 
         let connection = client.connection().clone();
         let device_id = client.device_id().to_owned();
+        let request_epoch = self.phone_request_epoch.clone();
+        let epoch = self.current_phone_request_epoch();
 
         // Fire-and-forget: the phone will send messages back via D-Bus signals
         tokio::spawn(async move {
+            if request_epoch.load(Ordering::Relaxed) != epoch {
+                tracing::debug!(
+                    "Skipping stale requestConversation for thread {}",
+                    thread_id
+                );
+                return;
+            }
             let client = ConversationsClient::new(connection, device_id);
             if let Err(e) = client.request_conversation(thread_id, 0, end).await {
                 tracing::warn!("Failed to request conversation {}: {}", thread_id, e);
@@ -896,8 +972,14 @@ impl App {
 
         let connection = client.connection().clone();
         let device_id = client.device_id().to_owned();
+        let request_epoch = self.phone_request_epoch.clone();
+        let epoch = self.current_phone_request_epoch();
 
         tokio::spawn(async move {
+            if request_epoch.load(Ordering::Relaxed) != epoch {
+                tracing::debug!("Skipping stale load-more request for thread {}", thread_id);
+                return;
+            }
             let client = ConversationsClient::new(connection, device_id);
             if let Err(e) = client.request_conversation(thread_id, start, end).await {
                 tracing::warn!("Failed to load more messages for {}: {}", thread_id, e);
@@ -928,8 +1010,12 @@ impl App {
             return;
         }
 
-        let Some(idx) = self.selected_conversation_idx else { return };
-        let Some(conv) = self.conversations.get(idx) else { return };
+        let Some(idx) = self.selected_conversation_idx else {
+            return;
+        };
+        let Some(conv) = self.conversations.get(idx) else {
+            return;
+        };
 
         // If we've requested messages but got none, retry the specific conversation
         if conv.messages_requested > 0 && conv.messages.is_empty() {
@@ -948,12 +1034,23 @@ impl App {
                 conv.messages_requested += Self::MESSAGE_PAGE_SIZE;
             }
 
-            let Some(ref client) = self.conversations_client else { return };
+            let Some(ref client) = self.conversations_client else {
+                return;
+            };
             let connection = client.connection().clone();
             let device_id = client.device_id().to_owned();
             let end = Self::MESSAGE_PAGE_SIZE;
+            let request_epoch = self.phone_request_epoch.clone();
+            let epoch = self.current_phone_request_epoch();
 
             tokio::spawn(async move {
+                if request_epoch.load(Ordering::Relaxed) != epoch {
+                    tracing::debug!(
+                        "Skipping stale retry requestConversation for thread {}",
+                        thread_id
+                    );
+                    return;
+                }
                 let client = ConversationsClient::new(connection, device_id);
                 if let Err(e) = client.request_conversation(thread_id, 0, end).await {
                     tracing::warn!("Retry: failed to request conversation {}: {}", thread_id, e);
@@ -973,7 +1070,13 @@ impl App {
             if let Some(ref client) = self.conversations_client {
                 let connection = client.connection().clone();
                 let device_id = client.device_id().to_owned();
+                let request_epoch = self.phone_request_epoch.clone();
+                let epoch = self.current_phone_request_epoch();
                 tokio::spawn(async move {
+                    if request_epoch.load(Ordering::Relaxed) != epoch {
+                        tracing::debug!("Skipping stale requestAllConversationThreads");
+                        return;
+                    }
                     let client = ConversationsClient::new(connection, device_id);
                     if let Err(e) = client.request_all_conversation_threads().await {
                         tracing::warn!("Auto-resync failed: {}", e);
@@ -1028,10 +1131,7 @@ impl App {
             if conv.loading_more_messages {
                 if let Some(started) = conv.loading_started_tick {
                     if current.wrapping_sub(started) >= LOADING_TIMEOUT_TICKS {
-                        tracing::warn!(
-                            "Loading timeout for thread {} — resetting",
-                            conv.thread_id
-                        );
+                        tracing::warn!("Loading timeout for thread {} — resetting", conv.thread_id);
                         conv.loading_more_messages = false;
                         conv.loading_started_tick = None;
                     }
@@ -1114,21 +1214,18 @@ impl App {
             let is_image = matches!(
                 ext.to_lowercase().as_str(),
                 "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "heic" | "heif"
-            ) || file_stem
-                .split('.')
-                .next()
-                .is_some_and(|_| {
-                    // Try to detect from the attachment metadata
-                    self.conversations.iter().any(|c| {
-                        c.messages.iter().any(|m| {
-                            m.attachments.iter().any(|a| {
-                                (a.unique_identifier == file_stem
-                                    || file_path.contains(&a.unique_identifier))
-                                    && a.is_image()
-                            })
+            ) || file_stem.split('.').next().is_some_and(|_| {
+                // Try to detect from the attachment metadata
+                self.conversations.iter().any(|c| {
+                    c.messages.iter().any(|m| {
+                        m.attachments.iter().any(|a| {
+                            (a.unique_identifier == file_stem
+                                || file_path.contains(&a.unique_identifier))
+                                && a.is_image()
                         })
                     })
-                });
+                })
+            });
 
             if is_image {
                 // Use content-based format detection instead of relying on file
@@ -1149,10 +1246,8 @@ impl App {
                     }
                     Err(e) => {
                         tracing::warn!("Failed to decode image {}: {}", file_path, e);
-                        self.image_states.insert(
-                            file_stem.to_string(),
-                            ImageState::Failed(e.to_string()),
-                        );
+                        self.image_states
+                            .insert(file_stem.to_string(), ImageState::Failed(e.to_string()));
                     }
                 }
             }
@@ -1183,10 +1278,7 @@ impl App {
                         if att.is_image() && att.cached_path.is_none() {
                             let candidate = cache_dir.join(&att.unique_identifier);
                             if candidate.exists() {
-                                tracing::debug!(
-                                    "Found cached attachment on disk: {:?}",
-                                    candidate
-                                );
+                                tracing::debug!("Found cached attachment on disk: {:?}", candidate);
                                 att.cached_path = Some(candidate);
                             }
                         }
@@ -1224,11 +1316,10 @@ impl App {
                     && !self.image_states.contains_key(&att.unique_identifier)
                 {
                     to_request.push((att.part_id, att.unique_identifier.clone()));
-                    self.pending_attachments.insert(att.unique_identifier.clone());
-                    self.image_states.insert(
-                        att.unique_identifier.clone(),
-                        ImageState::Downloading,
-                    );
+                    self.pending_attachments
+                        .insert(att.unique_identifier.clone());
+                    self.image_states
+                        .insert(att.unique_identifier.clone(), ImageState::Downloading);
                 }
             }
         }
@@ -1242,11 +1333,10 @@ impl App {
                     && !self.image_states.contains_key(&att.unique_identifier)
                 {
                     to_request.push((att.part_id, att.unique_identifier.clone()));
-                    self.pending_attachments.insert(att.unique_identifier.clone());
-                    self.image_states.insert(
-                        att.unique_identifier.clone(),
-                        ImageState::Downloading,
-                    );
+                    self.pending_attachments
+                        .insert(att.unique_identifier.clone());
+                    self.image_states
+                        .insert(att.unique_identifier.clone(), ImageState::Downloading);
                 }
             }
         }
@@ -1679,16 +1769,16 @@ impl App {
     // ── Group info popup ────────────────────────────────────────────
 
     fn open_group_info_popup(&mut self) {
-        let Some(idx) = self.selected_conversation_idx else { return };
-        let Some(conv) = self.conversations.get(idx) else { return };
+        let Some(idx) = self.selected_conversation_idx else {
+            return;
+        };
+        let Some(conv) = self.conversations.get(idx) else {
+            return;
+        };
         let thread_id = conv.thread_id;
 
         // Pre-fill with existing custom name, or generate initials
-        let existing = self
-            .state
-            .group_names
-            .get(&thread_id.to_string())
-            .cloned();
+        let existing = self.state.group_names.get(&thread_id.to_string()).cloned();
         let name = existing.unwrap_or_else(|| self.generate_group_initials(conv));
         self.group_name_input = name;
         self.group_name_cursor = self.group_name_input.len();
@@ -1803,7 +1893,11 @@ impl App {
             a_last.cmp(b_last).then(a_first.cmp(b_first))
         });
 
-        entries.into_iter().map(|(_, i)| i).collect::<Vec<_>>().join(",")
+        entries
+            .into_iter()
+            .map(|(_, i)| i)
+            .collect::<Vec<_>>()
+            .join(",")
     }
 
     /// Get the sorted member list for the group info popup.
@@ -1851,8 +1945,12 @@ impl App {
     // ── Archive / Spam ──────────────────────────────────────────────
 
     fn archive_selected_conversation(&mut self) {
-        let Some(idx) = self.selected_conversation_idx else { return };
-        let Some(conv) = self.conversations.get(idx) else { return };
+        let Some(idx) = self.selected_conversation_idx else {
+            return;
+        };
+        let Some(conv) = self.conversations.get(idx) else {
+            return;
+        };
         let thread_id = conv.thread_id;
         self.state.toggle_archived(thread_id);
         if let Err(e) = self.state.save() {
@@ -1863,8 +1961,12 @@ impl App {
     }
 
     fn spam_selected_conversation(&mut self) {
-        let Some(idx) = self.selected_conversation_idx else { return };
-        let Some(conv) = self.conversations.get(idx) else { return };
+        let Some(idx) = self.selected_conversation_idx else {
+            return;
+        };
+        let Some(conv) = self.conversations.get(idx) else {
+            return;
+        };
         let thread_id = conv.thread_id;
         self.state.toggle_spam(thread_id);
         if let Err(e) = self.state.save() {
@@ -1918,7 +2020,11 @@ impl App {
                         self.status_message = Some(format!("Failed to save state: {}", e));
                     }
                     // Select the restored conversation
-                    if let Some(pos) = self.conversations.iter().position(|c| c.thread_id == thread_id) {
+                    if let Some(pos) = self
+                        .conversations
+                        .iter()
+                        .position(|c| c.thread_id == thread_id)
+                    {
                         self.selected_conversation_idx = Some(pos);
                         self.message_scroll = 0;
                         self.reset_message_selection();
@@ -1997,10 +2103,20 @@ impl App {
         };
         // Sort by most recent message first.
         ids.sort_by(|a, b| {
-            let date_a = self.conversations.iter().find(|c| c.thread_id == *a)
-                .and_then(|c| c.latest_message.as_ref()).map(|m| m.date).unwrap_or(0);
-            let date_b = self.conversations.iter().find(|c| c.thread_id == *b)
-                .and_then(|c| c.latest_message.as_ref()).map(|m| m.date).unwrap_or(0);
+            let date_a = self
+                .conversations
+                .iter()
+                .find(|c| c.thread_id == *a)
+                .and_then(|c| c.latest_message.as_ref())
+                .map(|m| m.date)
+                .unwrap_or(0);
+            let date_b = self
+                .conversations
+                .iter()
+                .find(|c| c.thread_id == *b)
+                .and_then(|c| c.latest_message.as_ref())
+                .map(|m| m.date)
+                .unwrap_or(0);
             date_b.cmp(&date_a)
         });
         ids
@@ -2118,7 +2234,8 @@ impl App {
                 if self.compose_input.is_empty() {
                     self.drafts.remove(&thread_id);
                 } else {
-                    self.drafts.insert(thread_id, (self.compose_input.clone(), self.compose_cursor));
+                    self.drafts
+                        .insert(thread_id, (self.compose_input.clone(), self.compose_cursor));
                 }
             }
         }
@@ -2153,29 +2270,36 @@ impl App {
         let Some(conv) = self.conversations.get(idx) else {
             return;
         };
-        let Some(ref client) = self.conversations_client else {
+        let Some(client) = self.conversations_client.as_ref() else {
             self.status_message = Some("Not connected to device".into());
             return;
         };
+        let connection = client.connection().clone();
+        let device_id = client.device_id().to_owned();
 
         let thread_id = conv.thread_id;
 
         // Pass the local file path for the attachment (not a file:// URL).
         // KDE Connect's sendSms expects local paths via QVariant<QString>.
-        let file_path_str = self.pending_attachment.as_ref()
+        let file_path_str = self
+            .pending_attachment
+            .as_ref()
             .map(|(path, _mime)| path.display().to_string());
         let attachment_arg = file_path_str.as_deref();
 
-        match client.reply_to_conversation(thread_id, &text, attachment_arg).await {
+        self.begin_send_protection();
+        self.status_message = Some("Sending message...".into());
+        let client = ConversationsClient::new(connection, device_id);
+        match client
+            .reply_to_conversation(thread_id, &text, attachment_arg)
+            .await
+        {
             Ok(()) => {
                 self.compose_input.clear();
                 self.compose_cursor = 0;
                 self.pending_attachment = None;
                 self.drafts.remove(&thread_id);
                 self.status_message = Some("Message sent".into());
-                // Start the post-send cooldown to prevent daemon polling
-                // from interfering with message delivery.
-                self.last_send_time = Some(std::time::Instant::now());
             }
             Err(e) => {
                 self.status_message = Some(format!("Send failed: {}", e));
@@ -2191,7 +2315,12 @@ impl App {
         }
         let new_idx = match self.selected_conversation_idx {
             None => *visible.first().unwrap(),
-            Some(cur) => visible.iter().rev().find(|&&i| i < cur).copied().unwrap_or(visible[0]),
+            Some(cur) => visible
+                .iter()
+                .rev()
+                .find(|&&i| i < cur)
+                .copied()
+                .unwrap_or(visible[0]),
         };
         self.selected_conversation_idx = Some(new_idx);
         self.message_scroll = 0;
@@ -2206,7 +2335,11 @@ impl App {
         }
         let new_idx = match self.selected_conversation_idx {
             None => *visible.first().unwrap(),
-            Some(cur) => visible.iter().find(|&&i| i > cur).copied().unwrap_or(*visible.last().unwrap()),
+            Some(cur) => visible
+                .iter()
+                .find(|&&i| i > cur)
+                .copied()
+                .unwrap_or(*visible.last().unwrap()),
         };
         self.selected_conversation_idx = Some(new_idx);
         self.message_scroll = 0;
@@ -2236,9 +2369,16 @@ impl App {
         }
 
         // Extract info before mutating self.
-        let att_info = self.selected_message_and_attachment()
+        let att_info = self
+            .selected_message_and_attachment()
             .and_then(|(_, att)| att)
-            .map(|att| (att.cached_path.clone(), att.is_image(), att.mime_type.clone()));
+            .map(|att| {
+                (
+                    att.cached_path.clone(),
+                    att.is_image(),
+                    att.mime_type.clone(),
+                )
+            });
 
         let Some((cached_path, is_image, mime_type)) = att_info else {
             return true;
@@ -2436,10 +2576,11 @@ fn clipboard_copy_image(path: &std::path::Path) {
         }
         ClipboardBackend::WlCopy => std::process::Command::new("wl-copy")
             .args(["--type", mime])
-            .stdin(std::fs::File::open(path).ok().map_or(
-                std::process::Stdio::null(),
-                std::process::Stdio::from,
-            ))
+            .stdin(
+                std::fs::File::open(path)
+                    .ok()
+                    .map_or(std::process::Stdio::null(), std::process::Stdio::from),
+            )
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status(),
@@ -2736,7 +2877,11 @@ mod tests {
         msg2.uid = 42; // second signal: real uid from phone
         insert_message_sorted(&mut messages, msg2);
 
-        assert_eq!(messages.len(), 1, "same body+date should dedup even with different uids");
+        assert_eq!(
+            messages.len(),
+            1,
+            "same body+date should dedup even with different uids"
+        );
     }
 
     #[test]
@@ -2761,7 +2906,11 @@ mod tests {
         msg3.uid = 88;
         insert_message_sorted(&mut messages, msg3);
 
-        assert_eq!(messages.len(), 2, "same body outside 5s window is a new message");
+        assert_eq!(
+            messages.len(),
+            2,
+            "same body outside 5s window is a new message"
+        );
     }
 
     #[test]
@@ -2779,6 +2928,25 @@ mod tests {
         insert_message_sorted(&mut messages, msg2);
 
         assert_eq!(messages.len(), 1, "same non-zero uid should dedup");
+    }
+
+    #[test]
+    fn test_begin_send_protection_invalidates_phone_requests() {
+        let mut app = App::new_test();
+        let mut conv = Conversation::new(42);
+        conv.loading_more_messages = true;
+        conv.loading_started_tick = Some(12);
+        app.conversations.push(conv);
+        app.auto_resync_remaining = 3;
+
+        let before = app.current_phone_request_epoch();
+        app.begin_send_protection();
+
+        assert!(app.in_send_cooldown());
+        assert_eq!(app.current_phone_request_epoch(), before + 1);
+        assert_eq!(app.auto_resync_remaining, 0);
+        assert!(!app.conversations[0].loading_more_messages);
+        assert!(app.conversations[0].loading_started_tick.is_none());
     }
 
     #[test]
@@ -2895,10 +3063,7 @@ mod tests {
     #[test]
     fn test_drafts_saved_on_conversation_switch() {
         let mut app = App::new_test();
-        app.conversations = vec![
-            Conversation::new(1),
-            Conversation::new(2),
-        ];
+        app.conversations = vec![Conversation::new(1), Conversation::new(2)];
         app.selected_conversation_idx = Some(0);
         app.compose_input = "draft for thread 1".into();
         app.compose_cursor = 18;
