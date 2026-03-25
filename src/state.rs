@@ -95,8 +95,6 @@ impl AppState {
             .join("kdeconnect-sms-tui")
             .join("state.toml")
     }
-
-
 }
 
 #[cfg(test)]
@@ -140,7 +138,10 @@ mod tests {
         let serialized = toml::to_string_pretty(&state).unwrap();
         let deserialized: AppState = toml::from_str(&serialized).unwrap();
 
-        assert_eq!(deserialized.group_names.get("42"), Some(&"Family Chat".to_string()));
+        assert_eq!(
+            deserialized.group_names.get("42"),
+            Some(&"Family Chat".to_string())
+        );
         assert_eq!(deserialized.archived_threads, vec![10, 20]);
         assert_eq!(deserialized.spam_threads, vec![30]);
     }

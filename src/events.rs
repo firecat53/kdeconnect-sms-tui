@@ -70,6 +70,9 @@ pub fn spawn_event_loop(tick_rate: std::time::Duration) -> mpsc::UnboundedReceiv
 }
 
 /// Returns the sender half for injecting D-Bus signal events into the event loop.
-pub fn create_event_channel() -> (mpsc::UnboundedSender<AppEvent>, mpsc::UnboundedReceiver<AppEvent>) {
+pub fn create_event_channel() -> (
+    mpsc::UnboundedSender<AppEvent>,
+    mpsc::UnboundedReceiver<AppEvent>,
+) {
     mpsc::unbounded_channel()
 }

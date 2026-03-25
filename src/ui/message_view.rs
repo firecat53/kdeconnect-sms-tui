@@ -6,8 +6,8 @@ use ratatui::Frame;
 use ratatui_image::StatefulImage;
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::{App, Focus, ImageState};
 use super::{sanitize_for_terminal, theme};
+use crate::app::{App, Focus, ImageState};
 
 /// Maximum height (in terminal rows) for an inline image.
 const IMAGE_MAX_ROWS: u16 = 12;
@@ -50,7 +50,10 @@ impl RenderItem {
                 if width == 0 {
                     return lines.len() as u16;
                 }
-                lines.iter().map(|line| wrapped_line_height(line, width as usize)).sum()
+                lines
+                    .iter()
+                    .map(|line| wrapped_line_height(line, width as usize))
+                    .sum()
             }
             RenderItem::Image { height, .. } => *height,
             RenderItem::ImagePlaceholder { .. }
@@ -123,15 +126,23 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .title(" Messages ")
-        .title_style(if is_active { theme::title_style() } else { theme::help_style() })
+        .title_style(if is_active {
+            theme::title_style()
+        } else {
+            theme::help_style()
+        })
         .border_style(border_style);
 
     if let Some(loading) = loading_title {
-        block = block.title_bottom(loading).title_alignment(Alignment::Center);
+        block = block
+            .title_bottom(loading)
+            .title_alignment(Alignment::Center);
     }
 
     // No conversation selected
-    let selected = app.selected_conversation_idx.and_then(|i| app.conversations.get(i));
+    let selected = app
+        .selected_conversation_idx
+        .and_then(|i| app.conversations.get(i));
 
     if selected.is_none() {
         let placeholder = Paragraph::new("Select a conversation")
@@ -149,9 +160,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             "No messages loaded"
         };
-        let placeholder = Paragraph::new(hint)
-            .style(theme::help_style())
-            .block(block);
+        let placeholder = Paragraph::new(hint).style(theme::help_style()).block(block);
         f.render_widget(placeholder, area);
         return;
     }
@@ -173,7 +182,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         }
 
         let sender = if msg.is_incoming() {
-            let addr = msg.addresses.first().map(|a| a.address.as_str()).unwrap_or("?");
+            let addr = msg
+                .addresses
+                .first()
+                .map(|a| a.address.as_str())
+                .unwrap_or("?");
             app.contacts.display_name(addr)
         } else {
             "You".to_string()
@@ -193,7 +206,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(body),
         ])];
 
-        items.push(RenderItem::Text { lines: text_lines, sel: (msg_idx, 0) });
+        items.push(RenderItem::Text {
+            lines: text_lines,
+            sel: (msg_idx, 0),
+        });
 
         // Add each attachment as a separate selectable item (part 1, 2, ...)
         for (att_idx, att) in msg.attachments.iter().enumerate() {
@@ -307,7 +323,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Current selection
     let current_sel: Option<SelectionId> = if is_active {
-        app.selected_message_idx.map(|idx| (idx, app.selected_message_part))
+        app.selected_message_idx
+            .map(|idx| (idx, app.selected_message_part))
     } else {
         None
     };
@@ -431,7 +448,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                         height: *height,
                     };
                     if let Some(ImageState::Loaded(protocol)) = app.image_states.get_mut(uid) {
-                        let image_widget = StatefulImage::<ratatui_image::protocol::StatefulProtocol>::default();
+                        let image_widget =
+                            StatefulImage::<ratatui_image::protocol::StatefulProtocol>::default();
                         f.render_stateful_widget(image_widget, img_area, protocol.as_mut());
                     }
                     if is_selected {
@@ -548,10 +566,7 @@ mod tests {
         app.conversations.push(Conversation {
             thread_id: 1,
             latest_message: Some(make_msg("Hey!", true)),
-            messages: vec![
-                make_msg("Hey!", true),
-                make_msg("Hi there!", false),
-            ],
+            messages: vec![make_msg("Hey!", true), make_msg("Hi there!", false)],
             is_group: false,
             display_name: None,
             messages_requested: 0,
@@ -643,7 +658,11 @@ mod tests {
                 last_row_with_msg = y;
             }
         }
-        assert!(last_row_with_msg >= 10, "Message at row {} should be near bottom", last_row_with_msg);
+        assert!(
+            last_row_with_msg >= 10,
+            "Message at row {} should be near bottom",
+            last_row_with_msg
+        );
     }
 
     #[test]
@@ -675,12 +694,18 @@ mod tests {
             })
             .unwrap();
 
-        assert!(app.message_max_scroll > 0 || app.message_boundaries.is_empty(),
-            "scroll state should be coherent");
+        assert!(
+            app.message_max_scroll > 0 || app.message_boundaries.is_empty(),
+            "scroll state should be coherent"
+        );
 
         if !app.message_boundaries.is_empty() {
             for w in app.message_boundaries.windows(2) {
-                assert!(w[0] < w[1], "boundaries must be sorted: {:?}", app.message_boundaries);
+                assert!(
+                    w[0] < w[1],
+                    "boundaries must be sorted: {:?}",
+                    app.message_boundaries
+                );
             }
             assert!(app.message_boundaries[0] > 0);
             assert!(*app.message_boundaries.last().unwrap() <= app.message_max_scroll);
@@ -719,10 +744,7 @@ mod tests {
         app.conversations.push(Conversation {
             thread_id: 1,
             latest_message: Some(make_msg("msg2", false)),
-            messages: vec![
-                make_msg("msg1", true),
-                make_msg("msg2", false),
-            ],
+            messages: vec![make_msg("msg1", true), make_msg("msg2", false)],
             is_group: false,
             display_name: None,
             messages_requested: 0,
@@ -766,6 +788,9 @@ mod tests {
                 }
             }
         }
-        assert!(found_highlight, "Selected message should have highlighted background");
+        assert!(
+            found_highlight,
+            "Selected message should have highlighted background"
+        );
     }
 }

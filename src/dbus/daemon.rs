@@ -30,19 +30,20 @@ impl DaemonClient {
 
     /// Get list of device IDs.
     pub async fn device_ids(&self, only_reachable: bool, only_paired: bool) -> Result<Vec<String>> {
-        let reply: Vec<String> = timeout(DBUS_TIMEOUT, self
-            .connection
-            .call_method(
+        let reply: Vec<String> = timeout(
+            DBUS_TIMEOUT,
+            self.connection.call_method(
                 Some(KDECONNECT_SERVICE),
                 DAEMON_PATH,
                 Some(DAEMON_INTERFACE),
                 "devices",
                 &(only_reachable, only_paired),
-            ))
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: devices"))??
-            .body()
-            .deserialize()?;
+            ),
+        )
+        .await
+        .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: devices"))??
+        .body()
+        .deserialize()?;
         debug!("Got {} device IDs", reply.len());
         Ok(reply)
     }
@@ -53,37 +54,39 @@ impl DaemonClient {
         only_reachable: bool,
         only_paired: bool,
     ) -> Result<HashMap<String, String>> {
-        let reply: HashMap<String, String> = timeout(DBUS_TIMEOUT, self
-            .connection
-            .call_method(
+        let reply: HashMap<String, String> = timeout(
+            DBUS_TIMEOUT,
+            self.connection.call_method(
                 Some(KDECONNECT_SERVICE),
                 DAEMON_PATH,
                 Some(DAEMON_INTERFACE),
                 "deviceNames",
                 &(only_reachable, only_paired),
-            ))
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: deviceNames"))??
-            .body()
-            .deserialize()?;
+            ),
+        )
+        .await
+        .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: deviceNames"))??
+        .body()
+        .deserialize()?;
         Ok(reply)
     }
 
     /// Get a device ID by name.
     pub async fn device_id_by_name(&self, name: &str) -> Result<String> {
-        let reply: String = timeout(DBUS_TIMEOUT, self
-            .connection
-            .call_method(
+        let reply: String = timeout(
+            DBUS_TIMEOUT,
+            self.connection.call_method(
                 Some(KDECONNECT_SERVICE),
                 DAEMON_PATH,
                 Some(DAEMON_INTERFACE),
                 "deviceIdByName",
                 &name,
-            ))
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: deviceIdByName"))??
-            .body()
-            .deserialize()?;
+            ),
+        )
+        .await
+        .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: deviceIdByName"))??
+        .body()
+        .deserialize()?;
         Ok(reply)
     }
 
@@ -94,18 +97,21 @@ impl DaemonClient {
         T::Error: Into<zbus::Error>,
     {
         let path = format!("/modules/kdeconnect/devices/{}", device_id);
-        let proxy = timeout(DBUS_TIMEOUT, zbus::fdo::PropertiesProxy::builder(&self.connection)
-            .destination(KDECONNECT_SERVICE)?
-            .path(path.as_str())?
-            .build())
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: build proxy"))?
-            ?;
+        let proxy = timeout(
+            DBUS_TIMEOUT,
+            zbus::fdo::PropertiesProxy::builder(&self.connection)
+                .destination(KDECONNECT_SERVICE)?
+                .path(path.as_str())?
+                .build(),
+        )
+        .await
+        .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: build proxy"))??;
         let iface_name: zbus::names::InterfaceName<'_> = DEVICE_INTERFACE.try_into()?;
         let val = timeout(DBUS_TIMEOUT, proxy.get(iface_name, property))
             .await
-            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: get property {}", property))?
-            ?;
+            .map_err(|_| {
+                color_eyre::eyre::eyre!("D-Bus call timed out: get property {}", property)
+            })??;
         Ok(val.try_into().map_err(Into::into)?)
     }
 

@@ -7,9 +7,7 @@ pub fn title_style() -> Style {
 }
 
 pub fn selected_style() -> Style {
-    Style::default()
-        .bg(Color::DarkGray)
-        .fg(Color::White)
+    Style::default().bg(Color::DarkGray).fg(Color::White)
 }
 
 pub fn status_available() -> Style {

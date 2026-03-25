@@ -314,12 +314,14 @@ mod tests {
         let addr1 = Value::Structure(
             zbus::zvariant::StructureBuilder::new()
                 .add_field(Value::Str("+15551234".into()))
-                .build().unwrap(),
+                .build()
+                .unwrap(),
         );
         let addr2 = Value::Structure(
             zbus::zvariant::StructureBuilder::new()
                 .add_field(Value::Str("+15559876".into()))
-                .build().unwrap(),
+                .build()
+                .unwrap(),
         );
         let arr = Value::Array(vec![addr1, addr2].into());
 
@@ -334,25 +336,27 @@ mod tests {
         let addr = Value::Structure(
             zbus::zvariant::StructureBuilder::new()
                 .add_field(Value::Str("+15551234".into()))
-                .build().unwrap(),
+                .build()
+                .unwrap(),
         );
         let addresses = Value::Array(vec![addr].into());
-        let attachments: Value<'_> = Value::Array(
-            zbus::zvariant::Array::new(&zbus::zvariant::Signature::from_bytes(b"(xsss)").unwrap())
-        );
+        let attachments: Value<'_> = Value::Array(zbus::zvariant::Array::new(
+            &zbus::zvariant::Signature::from_bytes(b"(xsss)").unwrap(),
+        ));
 
         let structure = zbus::zvariant::StructureBuilder::new()
-            .add_field(Value::I32(0x1))            // event
+            .add_field(Value::I32(0x1)) // event
             .add_field(Value::Str("Hello!".into())) // body
-            .add_field(addresses)                    // addresses
-            .add_field(Value::I64(1700000000000))   // date
-            .add_field(Value::I32(1))               // type (Inbox)
-            .add_field(Value::I32(0))               // read
-            .add_field(Value::I64(42))              // threadID
-            .add_field(Value::I32(100))             // uID
-            .add_field(Value::I64(-1))              // subID
-            .add_field(attachments)                  // attachments
-            .build().unwrap();
+            .add_field(addresses) // addresses
+            .add_field(Value::I64(1700000000000)) // date
+            .add_field(Value::I32(1)) // type (Inbox)
+            .add_field(Value::I32(0)) // read
+            .add_field(Value::I64(42)) // threadID
+            .add_field(Value::I32(100)) // uID
+            .add_field(Value::I64(-1)) // subID
+            .add_field(attachments) // attachments
+            .build()
+            .unwrap();
 
         let msg = parse_message_from_struct(&structure).unwrap();
         assert_eq!(msg.body, "Hello!");
@@ -369,20 +373,22 @@ mod tests {
         let addr1 = Value::Structure(
             zbus::zvariant::StructureBuilder::new()
                 .add_field(Value::Str("+15551111".into()))
-                .build().unwrap(),
+                .build()
+                .unwrap(),
         );
         let addr2 = Value::Structure(
             zbus::zvariant::StructureBuilder::new()
                 .add_field(Value::Str("+15552222".into()))
-                .build().unwrap(),
+                .build()
+                .unwrap(),
         );
         let addresses = Value::Array(vec![addr1, addr2].into());
-        let attachments: Value<'_> = Value::Array(
-            zbus::zvariant::Array::new(&zbus::zvariant::Signature::from_bytes(b"(xsss)").unwrap())
-        );
+        let attachments: Value<'_> = Value::Array(zbus::zvariant::Array::new(
+            &zbus::zvariant::Signature::from_bytes(b"(xsss)").unwrap(),
+        ));
 
         let structure = zbus::zvariant::StructureBuilder::new()
-            .add_field(Value::I32(0x3))            // event: text + group
+            .add_field(Value::I32(0x3)) // event: text + group
             .add_field(Value::Str("Group msg".into()))
             .add_field(addresses)
             .add_field(Value::I64(2000))
@@ -392,7 +398,8 @@ mod tests {
             .add_field(Value::I32(1))
             .add_field(Value::I64(-1))
             .add_field(attachments)
-            .build().unwrap();
+            .build()
+            .unwrap();
 
         let msg = parse_message_from_struct(&structure).unwrap();
         assert!(msg.is_group());

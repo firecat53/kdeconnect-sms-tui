@@ -248,9 +248,9 @@ src/
 - [x] Show `[Downloading...]` placeholder while fetching, `[Image failed: ...]` on error
 - [x] `requestAttachmentFile()` + `attachmentReceived` signal flow
 - [x] Uses kdeconnect's built-in cache (`~/.cache/kdeconnect/{device_name}/`)
-- [ ] Non-image attachments: open via `xdg-open` on keypress
+- [x] Non-image attachments: open via `xdg-open` on keypress
 - [ ] Allow selecting and downloading/saving images to a chosen path
-- [ ] Attachment picker for sending (file browser dialog or path input)
+- [x] Attachment picker for sending (file browser dialog or path input)
 - [ ] **Tests**: attachment download/cache
 
 ### Phase 5: Group Messages & Replies

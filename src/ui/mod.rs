@@ -1,12 +1,12 @@
-pub mod device_bar;
-pub mod conversation_list;
-pub mod message_view;
 pub mod compose;
+pub mod conversation_list;
+pub mod device_bar;
 pub mod device_popup;
-pub mod group_info_popup;
 pub mod file_picker_popup;
 pub mod folder_popup;
+pub mod group_info_popup;
 pub mod help_popup;
+pub mod message_view;
 pub mod theme;
 
 #[cfg(test)]
@@ -57,7 +57,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // device bar
-            Constraint::Min(1),   // main content
+            Constraint::Min(1),    // main content
         ])
         .split(f.area());
 

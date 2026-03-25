@@ -4,8 +4,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
 use ratatui::Frame;
 
-use crate::app::App;
 use super::theme;
+use crate::app::App;
 
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
@@ -35,11 +35,12 @@ pub fn draw(f: &mut Frame, app: &App) {
             } else {
                 theme::status_unavailable()
             };
-            let marker = if app.selected_device_idx == app.devices.iter().position(|d| d.id == device.id) {
-                Span::styled("* ", style.add_modifier(Modifier::BOLD))
-            } else {
-                Span::raw("  ")
-            };
+            let marker =
+                if app.selected_device_idx == app.devices.iter().position(|d| d.id == device.id) {
+                    Span::styled("* ", style.add_modifier(Modifier::BOLD))
+                } else {
+                    Span::raw("  ")
+                };
             ListItem::new(Line::from(vec![
                 marker,
                 Span::styled(&device.name, style),

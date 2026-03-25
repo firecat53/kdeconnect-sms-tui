@@ -40,7 +40,9 @@ pub fn draw(f: &mut Frame) {
         .map(|(_, d)| key_col_width + d.len())
         .max()
         .unwrap_or(40) as u16;
-    let popup_width = (content_width + 4).min(area.width.saturating_sub(4)).max(30);
+    let popup_width = (content_width + 4)
+        .min(area.width.saturating_sub(4))
+        .max(30);
     let popup_height = (HELP_ENTRIES.len() as u16 + 3).min(area.height.saturating_sub(2));
     let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
     let y = area.y + (area.height.saturating_sub(popup_height)) / 2;

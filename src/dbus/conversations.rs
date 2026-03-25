@@ -37,36 +37,44 @@ impl ConversationsClient {
 
     /// Request kdeconnect to fetch all conversation threads from the phone.
     pub async fn request_all_conversation_threads(&self) -> Result<()> {
-        timeout(DBUS_TIMEOUT, self.connection
-            .call_method(
+        timeout(
+            DBUS_TIMEOUT,
+            self.connection.call_method(
                 Some(KDECONNECT_SERVICE),
                 self.device_path().as_str(),
                 Some(CONVERSATIONS_INTERFACE),
                 "requestAllConversationThreads",
                 &(),
-            ))
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: requestAllConversationThreads"))??;
+            ),
+        )
+        .await
+        .map_err(|_| {
+            color_eyre::eyre::eyre!("D-Bus call timed out: requestAllConversationThreads")
+        })??;
         info!("Requested all conversation threads");
         Ok(())
     }
 
     /// Get the list of active conversations (most recent message per thread).
     pub async fn active_conversations(&self) -> Result<Vec<Conversation>> {
-        let msg = timeout(DBUS_TIMEOUT, self
-            .connection
-            .call_method(
+        let msg = timeout(
+            DBUS_TIMEOUT,
+            self.connection.call_method(
                 Some(KDECONNECT_SERVICE),
                 self.device_path().as_str(),
                 Some(CONVERSATIONS_INTERFACE),
                 "activeConversations",
                 &(),
-            ))
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: activeConversations"))??;
+            ),
+        )
+        .await
+        .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: activeConversations"))??;
 
         let body = msg.body();
-        debug!("activeConversations response signature: {:?}", body.signature());
+        debug!(
+            "activeConversations response signature: {:?}",
+            body.signature()
+        );
 
         // The response is av (array of variants), each variant wrapping a struct
         if let Ok(reply) = body.deserialize::<Vec<OwnedValue>>() {
@@ -80,7 +88,10 @@ impl ConversationsClient {
         if let Ok(reply) = body.deserialize::<OwnedValue>() {
             if let Ok(vec) = <Vec<OwnedValue>>::try_from(reply.clone()) {
                 let conversations = parse_active_conversations(&vec);
-                info!("Got {} active conversations (unwrapped)", conversations.len());
+                info!(
+                    "Got {} active conversations (unwrapped)",
+                    conversations.len()
+                );
                 return Ok(conversations);
             }
             let conversations = parse_active_conversations(&[reply]);
@@ -93,23 +104,23 @@ impl ConversationsClient {
     }
 
     /// Request messages for a specific conversation thread.
-    pub async fn request_conversation(
-        &self,
-        thread_id: i64,
-        start: i32,
-        end: i32,
-    ) -> Result<()> {
-        timeout(DBUS_TIMEOUT, self.connection
-            .call_method(
+    pub async fn request_conversation(&self, thread_id: i64, start: i32, end: i32) -> Result<()> {
+        timeout(
+            DBUS_TIMEOUT,
+            self.connection.call_method(
                 Some(KDECONNECT_SERVICE),
                 self.device_path().as_str(),
                 Some(CONVERSATIONS_INTERFACE),
                 "requestConversation",
                 &(thread_id, start, end),
-            ))
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: requestConversation"))??;
-        debug!("Requested conversation {} (range {}-{})", thread_id, start, end);
+            ),
+        )
+        .await
+        .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: requestConversation"))??;
+        debug!(
+            "Requested conversation {} (range {}-{})",
+            thread_id, start, end
+        );
         Ok(())
     }
 
@@ -127,16 +138,18 @@ impl ConversationsClient {
             Some(path) => vec![Value::from(path.to_string())],
             None => Vec::new(),
         };
-        timeout(DBUS_TIMEOUT, self.connection
-            .call_method(
+        timeout(
+            DBUS_TIMEOUT,
+            self.connection.call_method(
                 Some(KDECONNECT_SERVICE),
                 self.device_path().as_str(),
                 Some(CONVERSATIONS_INTERFACE),
                 "replyToConversation",
                 &(thread_id, message, &attachments),
-            ))
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: replyToConversation"))??;
+            ),
+        )
+        .await
+        .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: replyToConversation"))??;
         info!("Sent reply to thread {}", thread_id);
         Ok(())
     }
@@ -154,16 +167,18 @@ impl ConversationsClient {
             Some(path) => vec![Value::from(path.to_string())],
             None => Vec::new(),
         };
-        timeout(DBUS_TIMEOUT, self.connection
-            .call_method(
+        timeout(
+            DBUS_TIMEOUT,
+            self.connection.call_method(
                 Some(KDECONNECT_SERVICE),
                 self.device_path().as_str(),
                 Some(CONVERSATIONS_INTERFACE),
                 "sendWithoutConversation",
                 &(addresses, message, &attachments),
-            ))
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: sendWithoutConversation"))??;
+            ),
+        )
+        .await
+        .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: sendWithoutConversation"))??;
         info!("Sent message to {:?}", addresses);
         Ok(())
     }
@@ -175,17 +190,22 @@ impl ConversationsClient {
         part_id: i64,
         unique_identifier: &str,
     ) -> Result<()> {
-        timeout(DBUS_TIMEOUT, self.connection
-            .call_method(
+        timeout(
+            DBUS_TIMEOUT,
+            self.connection.call_method(
                 Some(KDECONNECT_SERVICE),
                 self.device_path().as_str(),
                 Some(CONVERSATIONS_INTERFACE),
                 "requestAttachmentFile",
                 &(part_id, unique_identifier),
-            ))
-            .await
-            .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: requestAttachmentFile"))??;
-        debug!("Requested attachment partID={} uid={}", part_id, unique_identifier);
+            ),
+        )
+        .await
+        .map_err(|_| color_eyre::eyre::eyre!("D-Bus call timed out: requestAttachmentFile"))??;
+        debug!(
+            "Requested attachment partID={} uid={}",
+            part_id, unique_identifier
+        );
         Ok(())
     }
 
@@ -244,7 +264,7 @@ pub fn parse_signal_message(val: &OwnedValue) -> Option<Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zbus::zvariant::{StructureBuilder, Value, Array, Signature};
+    use zbus::zvariant::{Array, Signature, StructureBuilder, Value};
 
     /// Build a conversation variant matching what kdeconnect actually sends:
     /// variant { struct(event, body, addresses, date, type, read, threadID, uID, subID, attachments) }
@@ -252,18 +272,27 @@ mod tests {
         make_conversation_variant_addrs(thread_id, date, body, event, &["+15551234"])
     }
 
-    fn make_conversation_variant_addrs(thread_id: i64, date: i64, body: &str, event: i32, addrs: &[&str]) -> OwnedValue {
-        let addr_values: Vec<Value<'_>> = addrs.iter().map(|a| {
-            Value::Structure(
-                StructureBuilder::new()
-                    .add_field(Value::Str((*a).into()))
-                    .build().unwrap(),
-            )
-        }).collect();
+    fn make_conversation_variant_addrs(
+        thread_id: i64,
+        date: i64,
+        body: &str,
+        event: i32,
+        addrs: &[&str],
+    ) -> OwnedValue {
+        let addr_values: Vec<Value<'_>> = addrs
+            .iter()
+            .map(|a| {
+                Value::Structure(
+                    StructureBuilder::new()
+                        .add_field(Value::Str((*a).into()))
+                        .build()
+                        .unwrap(),
+                )
+            })
+            .collect();
         let addresses = Value::Array(addr_values.into());
-        let attachments: Value<'_> = Value::Array(
-            Array::new(&Signature::from_bytes(b"(xsss)").unwrap())
-        );
+        let attachments: Value<'_> =
+            Value::Array(Array::new(&Signature::from_bytes(b"(xsss)").unwrap()));
 
         let structure = Value::Structure(
             StructureBuilder::new()
@@ -271,13 +300,14 @@ mod tests {
                 .add_field(Value::Str(body.into()))
                 .add_field(addresses)
                 .add_field(Value::I64(date))
-                .add_field(Value::I32(1))       // type: Inbox
-                .add_field(Value::I32(0))       // read
+                .add_field(Value::I32(1)) // type: Inbox
+                .add_field(Value::I32(0)) // read
                 .add_field(Value::I64(thread_id))
-                .add_field(Value::I32(1))       // uID
-                .add_field(Value::I64(-1))      // subID
+                .add_field(Value::I32(1)) // uID
+                .add_field(Value::I64(-1)) // subID
                 .add_field(attachments)
-                .build().unwrap(),
+                .build()
+                .unwrap(),
         );
 
         // Wrap in variant like kdeconnect does
@@ -306,9 +336,13 @@ mod tests {
     #[test]
     fn test_parse_active_conversations_group() {
         // A true group MMS has 3+ addresses (self + 2 others)
-        let values = vec![
-            make_conversation_variant_addrs(1, 1000, "group msg", 0x3, &["+15551111", "+15552222", "+15553333"]),
-        ];
+        let values = vec![make_conversation_variant_addrs(
+            1,
+            1000,
+            "group msg",
+            0x3,
+            &["+15551111", "+15552222", "+15553333"],
+        )];
 
         let convos = parse_active_conversations(&values);
         assert_eq!(convos.len(), 1);
@@ -318,9 +352,13 @@ mod tests {
     #[test]
     fn test_two_addresses_not_group() {
         // A 1:1 MMS has 2 addresses (self + other) — not a group
-        let values = vec![
-            make_conversation_variant_addrs(1, 1000, "mms msg", 0x3, &["+15551111", "+15552222"]),
-        ];
+        let values = vec![make_conversation_variant_addrs(
+            1,
+            1000,
+            "mms msg",
+            0x3,
+            &["+15551111", "+15552222"],
+        )];
 
         let convos = parse_active_conversations(&values);
         assert_eq!(convos.len(), 1);
@@ -330,9 +368,7 @@ mod tests {
     #[test]
     fn test_single_address_not_group_even_with_multitarget_event() {
         // Android sets EventMultiTarget on MMS messages even in 1:1 conversations
-        let values = vec![
-            make_conversation_variant(1, 1000, "mms msg", 0x3),
-        ];
+        let values = vec![make_conversation_variant(1, 1000, "mms msg", 0x3)];
 
         let convos = parse_active_conversations(&values);
         assert_eq!(convos.len(), 1);

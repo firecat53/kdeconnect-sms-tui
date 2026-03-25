@@ -5,8 +5,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::App;
 use super::theme;
+use crate::app::App;
 
 const HELP_TEXT: &str = "Tab:pane  j/k:nav  J/K:page  i:compose  g:group  a/A:archive  s/S:spam  d:devices  r:refresh  q:quit";
 
@@ -18,7 +18,10 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     left_spans.push(Span::raw(" "));
 
     if app.devices.is_empty() {
-        left_spans.push(Span::styled("No devices found", theme::status_unavailable()));
+        left_spans.push(Span::styled(
+            "No devices found",
+            theme::status_unavailable(),
+        ));
         left_spans.push(Span::styled(
             " -- is kdeconnectd running?",
             theme::help_style(),
@@ -32,13 +35,13 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         left_spans.push(Span::styled(&device.name, style));
 
         if let Some(ref status) = app.status_message {
-            left_spans.push(Span::styled(
-                format!("  [{}]", status),
-                theme::help_style(),
-            ));
+            left_spans.push(Span::styled(format!("  [{}]", status), theme::help_style()));
         }
     } else {
-        left_spans.push(Span::styled("No device selected", theme::status_unavailable()));
+        left_spans.push(Span::styled(
+            "No device selected",
+            theme::status_unavailable(),
+        ));
     }
 
     // Calculate left side width

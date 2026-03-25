@@ -17,9 +17,7 @@ impl Attachment {
     }
 
     pub fn is_cached(&self) -> bool {
-        self.cached_path
-            .as_ref()
-            .is_some_and(|p| p.exists())
+        self.cached_path.as_ref().is_some_and(|p| p.exists())
     }
 }
 

@@ -36,17 +36,13 @@ async fn main() -> Result<()> {
     #[cfg(feature = "heif")]
     libheif_rs::integration::image::register_all_decoding_hooks();
 
-
     // Install a panic hook that restores the terminal before printing
     // the panic message, so the user doesn't end up with an unusable
     // terminal.
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::LeaveAlternateScreen
-        );
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
         original_hook(panic_info);
     }));
 

@@ -38,7 +38,7 @@
           version = "0.1.0";
           src = ./.;
           useFetchCargoVendor = true;
-          cargoHash = "";
+          cargoHash = "sha256-QcwMn70GlASJFAWF9oPvyNJajmf+6HShSTKfCbiElGA=";
 
           inherit nativeBuildInputs buildInputs;
 

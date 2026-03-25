@@ -210,7 +210,10 @@ fn parse_vcard_contacts(content: &str, contacts: &mut HashMap<String, String>) {
 /// Normalize a phone number for consistent lookup.
 /// Strips spaces, dashes, parens, and leading country code variations.
 pub fn normalize_phone(phone: &str) -> String {
-    let digits: String = phone.chars().filter(|c| c.is_ascii_digit() || *c == '+').collect();
+    let digits: String = phone
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '+')
+        .collect();
     // Keep the + prefix if present, strip everything else
     digits
 }
@@ -328,7 +331,10 @@ END:VCARD
         assert_eq!(store.lookup("5551234567").as_deref(), Some("Alice Smith"));
 
         // With formatting — should still match
-        assert_eq!(store.lookup("(555) 123-4567").as_deref(), Some("Alice Smith"));
+        assert_eq!(
+            store.lookup("(555) 123-4567").as_deref(),
+            Some("Alice Smith")
+        );
 
         // UK number without + prefix
         assert_eq!(store.lookup("442071234567").as_deref(), Some("Bob Jones"));

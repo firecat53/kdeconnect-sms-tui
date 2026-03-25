@@ -5,8 +5,8 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::{App, Focus, LoadingState};
 use super::{sanitize_for_terminal, theme};
+use crate::app::{App, Focus, LoadingState};
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let title = match app.loading {
@@ -24,7 +24,11 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .title_style(if is_active { theme::title_style() } else { theme::help_style() })
+        .title_style(if is_active {
+            theme::title_style()
+        } else {
+            theme::help_style()
+        })
         .border_style(border_style);
 
     if app.conversations.is_empty() {
@@ -66,7 +70,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 app.generate_group_initials(conv)
             } else {
                 let addr = conv.primary_address().unwrap_or("Unknown");
-                app.contacts.lookup(addr).unwrap_or_else(|| addr.to_string())
+                app.contacts
+                    .lookup(addr)
+                    .unwrap_or_else(|| addr.to_string())
             };
 
             let is_unread = conv
@@ -127,9 +133,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
     let mut state = ListState::default();
     // Map the original selected index to the filtered list position.
-    let filtered_idx = app.selected_conversation_idx.and_then(|sel| {
-        visible.iter().position(|(orig_idx, _)| *orig_idx == sel)
-    });
+    let filtered_idx = app
+        .selected_conversation_idx
+        .and_then(|sel| visible.iter().position(|(orig_idx, _)| *orig_idx == sel));
     state.select(filtered_idx);
     f.render_stateful_widget(list, area, &mut state);
 }
@@ -247,7 +253,9 @@ fn format_time_of_day(millis: i64) -> String {
     let secs = millis / 1000;
     let time_t = secs as libc::time_t;
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::localtime_r(&time_t, &mut tm); }
+    unsafe {
+        libc::localtime_r(&time_t, &mut tm);
+    }
     format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
 }
 
@@ -401,8 +409,8 @@ mod tests {
         assert_eq!(safe_char_width('❤'), 2); // U+2764 (Heavy Black Heart)
         assert_eq!(safe_char_width('✅'), 2); // U+2705
         assert_eq!(safe_char_width('⭐'), 2); // U+2B50
-        assert_eq!(safe_char_width('☀'), 2);  // U+2600
-        // Regular ASCII should be 1
+        assert_eq!(safe_char_width('☀'), 2); // U+2600
+                                             // Regular ASCII should be 1
         assert_eq!(safe_char_width('A'), 1);
         assert_eq!(safe_char_width(' '), 1);
     }

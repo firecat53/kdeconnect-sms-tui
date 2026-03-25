@@ -1,8 +1,8 @@
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
-use zbus::Connection;
 use zbus::message::Body;
 use zbus::zvariant::OwnedValue;
+use zbus::Connection;
 
 use crate::dbus::conversations::parse_signal_message;
 use crate::events::AppEvent;
@@ -87,10 +87,8 @@ async fn listen_signals(
             }
             Some("conversationLoaded") => {
                 // Signal carries (conversationID: i64, messageCount: u64)
-                let (thread_id, message_count) = msg
-                    .body()
-                    .deserialize::<(i64, u64)>()
-                    .unwrap_or((0, 0));
+                let (thread_id, message_count) =
+                    msg.body().deserialize::<(i64, u64)>().unwrap_or((0, 0));
                 debug!(
                     "Signal: conversationLoaded thread={} count={}",
                     thread_id, message_count
@@ -99,8 +97,14 @@ async fn listen_signals(
             }
             Some("attachmentReceived") => {
                 if let Ok((file_path, file_name)) = msg.body().deserialize::<(String, String)>() {
-                    debug!("Signal: attachmentReceived path={} name={}", file_path, file_name);
-                    if tx.send(AppEvent::AttachmentReceived(file_path, file_name)).is_err() {
+                    debug!(
+                        "Signal: attachmentReceived path={} name={}",
+                        file_path, file_name
+                    );
+                    if tx
+                        .send(AppEvent::AttachmentReceived(file_path, file_name))
+                        .is_err()
+                    {
                         break;
                     }
                 }

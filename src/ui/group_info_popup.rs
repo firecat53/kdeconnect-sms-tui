@@ -3,8 +3,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::App;
 use super::theme;
+use crate::app::App;
 
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
@@ -24,7 +24,11 @@ pub fn draw(f: &mut Frame, app: &App) {
         .selected_conversation_idx
         .and_then(|i| app.conversations.get(i))
         .is_some_and(|c| c.is_group);
-    let title = if is_group { " Group Info " } else { " Contact Info " };
+    let title = if is_group {
+        " Group Info "
+    } else {
+        " Contact Info "
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -67,10 +71,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     lines.push(Line::from(vec![
         Span::styled(before.to_string(), theme::title_style()),
-        Span::styled(
-            cursor_char.to_string(),
-            theme::selected_style(),
-        ),
+        Span::styled(cursor_char.to_string(), theme::selected_style()),
         Span::styled(after.to_string(), theme::title_style()),
     ]));
 

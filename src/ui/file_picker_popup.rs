@@ -7,8 +7,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
 use super::theme;
+use crate::app::App;
 
 /// Image file extensions we allow in the picker.
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif"];
@@ -30,7 +30,8 @@ pub fn refresh_file_picker_entries(app: &mut App) {
         for entry in entries.flatten() {
             let path = entry.path();
             // Skip hidden files/dirs
-            if path.file_name()
+            if path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .map(|n| n.starts_with('.'))
                 .unwrap_or(false)
@@ -46,11 +47,15 @@ pub fn refresh_file_picker_entries(app: &mut App) {
     }
 
     dirs.sort_by(|a, b| {
-        a.file_name().unwrap_or_default().to_ascii_lowercase()
+        a.file_name()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
             .cmp(&b.file_name().unwrap_or_default().to_ascii_lowercase())
     });
     files.sort_by(|a, b| {
-        a.file_name().unwrap_or_default().to_ascii_lowercase()
+        a.file_name()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
             .cmp(&b.file_name().unwrap_or_default().to_ascii_lowercase())
     });
 
@@ -61,7 +66,11 @@ pub fn refresh_file_picker_entries(app: &mut App) {
 
 /// Detect MIME type from file extension.
 pub fn mime_from_path(path: &PathBuf) -> String {
-    match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()) {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+    {
         Some(ref ext) if ext == "jpg" || ext == "jpeg" => "image/jpeg".into(),
         Some(ref ext) if ext == "png" => "image/png".into(),
         Some(ref ext) if ext == "gif" => "image/gif".into(),
@@ -83,7 +92,8 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     f.render_widget(Clear, popup_area);
 
-    let dir_name = app.file_picker_dir
+    let dir_name = app
+        .file_picker_dir
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("/");
@@ -109,9 +119,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     ))));
 
     for entry in &app.file_picker_entries {
-        let name = entry.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("?");
+        let name = entry.file_name().and_then(|n| n.to_str()).unwrap_or("?");
         if entry.is_dir() {
             items.push(ListItem::new(Line::from(Span::styled(
                 format!("{}/", name),
@@ -129,8 +137,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     f.render_widget(block, popup_area);
 
     // Render list
-    let list = List::new(items)
-        .highlight_style(theme::selected_style());
+    let list = List::new(items).highlight_style(theme::selected_style());
     let mut state = ListState::default();
     state.select(Some(app.file_picker_idx));
     f.render_stateful_widget(list, list_area, &mut state);
@@ -152,7 +159,10 @@ mod tests {
     fn test_mime_from_path() {
         assert_eq!(mime_from_path(&PathBuf::from("photo.jpg")), "image/jpeg");
         assert_eq!(mime_from_path(&PathBuf::from("photo.PNG")), "image/png");
-        assert_eq!(mime_from_path(&PathBuf::from("file.txt")), "application/octet-stream");
+        assert_eq!(
+            mime_from_path(&PathBuf::from("file.txt")),
+            "application/octet-stream"
+        );
     }
 
     #[test]

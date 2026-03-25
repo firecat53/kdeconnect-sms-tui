@@ -3,8 +3,8 @@ use ratatui::text::Span;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, Focus};
 use super::theme;
+use crate::app::{App, Focus};
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let is_focused = app.focus == Focus::Compose;
@@ -24,17 +24,18 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .title_style(if is_focused { theme::title_style() } else { theme::help_style() })
+        .title_style(if is_focused {
+            theme::title_style()
+        } else {
+            theme::help_style()
+        })
         .border_style(border_style);
 
     let has_attachment = app.pending_attachment.is_some();
 
     if app.compose_input.is_empty() && !is_focused && !has_attachment {
-        let placeholder = Paragraph::new(Span::styled(
-            "Type a message...",
-            theme::help_style(),
-        ))
-        .block(block);
+        let placeholder =
+            Paragraph::new(Span::styled("Type a message...", theme::help_style())).block(block);
         f.render_widget(placeholder, area);
         return;
     }
@@ -45,9 +46,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
     // Render attachment indicator if present (takes one line)
     let text_y_offset: u16 = if let Some((ref path, _)) = app.pending_attachment {
-        let filename = path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file");
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
         let label = format!("[Attached: {}] (Alt+X: remove)", filename);
         let attach_area = Rect::new(inner.x, inner.y, inner.width, 1);
         let attach_line = Paragraph::new(Span::styled(label, theme::help_style()));
@@ -65,8 +64,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         inner.height.saturating_sub(text_y_offset),
     );
     let text = &app.compose_input;
-    let paragraph = Paragraph::new(text.as_str())
-        .wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(text.as_str()).wrap(Wrap { trim: false });
     f.render_widget(paragraph, text_area);
 
     // Show cursor when focused

@@ -3,8 +3,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
 use ratatui::Frame;
 
-use crate::app::{App, FolderKind};
 use super::theme;
+use crate::app::{App, FolderKind};
 
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
@@ -38,9 +38,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         };
         let inner = block.inner(popup_area);
         f.render_widget(block, popup_area);
-        let paragraph = ratatui::widgets::Paragraph::new(
-            Line::from(Span::styled(empty_msg, theme::help_style())),
-        );
+        let paragraph = ratatui::widgets::Paragraph::new(Line::from(Span::styled(
+            empty_msg,
+            theme::help_style(),
+        )));
         f.render_widget(paragraph, inner);
         return;
     }
@@ -52,12 +53,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             let name = conv
                 .and_then(|c| c.display_name.as_deref())
                 .map(|s| s.to_string())
-                .or_else(|| {
-                    app.state
-                        .group_names
-                        .get(&tid.to_string())
-                        .cloned()
-                })
+                .or_else(|| app.state.group_names.get(&tid.to_string()).cloned())
                 .or_else(|| {
                     conv.and_then(|c| c.primary_address())
                         .and_then(|addr| app.contacts.lookup(addr))
