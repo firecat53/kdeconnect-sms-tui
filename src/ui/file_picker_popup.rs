@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
@@ -13,7 +13,7 @@ use crate::app::App;
 /// Image file extensions we allow in the picker.
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif"];
 
-fn is_image_file(path: &PathBuf) -> bool {
+fn is_image_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| IMAGE_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
@@ -65,7 +65,7 @@ pub fn refresh_file_picker_entries(app: &mut App) {
 }
 
 /// Detect MIME type from file extension.
-pub fn mime_from_path(path: &PathBuf) -> String {
+pub fn mime_from_path(path: &Path) -> String {
     match path
         .extension()
         .and_then(|e| e.to_str())
@@ -157,10 +157,16 @@ mod tests {
 
     #[test]
     fn test_mime_from_path() {
-        assert_eq!(mime_from_path(&PathBuf::from("photo.jpg")), "image/jpeg");
-        assert_eq!(mime_from_path(&PathBuf::from("photo.PNG")), "image/png");
         assert_eq!(
-            mime_from_path(&PathBuf::from("file.txt")),
+            mime_from_path(&std::path::PathBuf::from("photo.jpg")),
+            "image/jpeg"
+        );
+        assert_eq!(
+            mime_from_path(&std::path::PathBuf::from("photo.PNG")),
+            "image/png"
+        );
+        assert_eq!(
+            mime_from_path(&std::path::PathBuf::from("file.txt")),
             "application/octet-stream"
         );
     }
@@ -168,10 +174,10 @@ mod tests {
     #[test]
     fn test_file_picker_popup_renders() {
         let mut app = App::new_test();
-        app.file_picker_dir = PathBuf::from("/tmp");
+        app.file_picker_dir = std::path::PathBuf::from("/tmp");
         app.file_picker_entries = vec![
-            PathBuf::from("/tmp/photos"),
-            PathBuf::from("/tmp/image.jpg"),
+            std::path::PathBuf::from("/tmp/photos"),
+            std::path::PathBuf::from("/tmp/image.jpg"),
         ];
         app.file_picker_idx = 0;
 

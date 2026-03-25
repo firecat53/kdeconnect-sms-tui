@@ -370,8 +370,8 @@ mod tests {
 
         assert_eq!(format_timestamp(now_millis), "now");
         assert_eq!(format_timestamp(now_millis - 120_000), "2m");
-        assert_eq!(format_timestamp(now_millis - 7200_000), "2h");
-        assert_eq!(format_timestamp(now_millis - 172800_000), "2d");
+        assert_eq!(format_timestamp(now_millis - 7_200_000), "2h");
+        assert_eq!(format_timestamp(now_millis - 172_800_000), "2d");
     }
 
     #[test]

@@ -76,7 +76,7 @@ impl Conversation {
 
 /// Sort conversations by most recent first.
 pub fn sort_by_recent(conversations: &mut [Conversation]) {
-    conversations.sort_by(|a, b| b.last_timestamp().cmp(&a.last_timestamp()));
+    conversations.sort_by_key(|conv| std::cmp::Reverse(conv.last_timestamp()));
 }
 
 #[cfg(test)]

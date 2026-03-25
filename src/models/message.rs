@@ -63,10 +63,12 @@ impl Message {
         )
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_group(&self) -> bool {
         self.event & 0x2 != 0
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn has_text(&self) -> bool {
         self.event & 0x1 != 0
     }

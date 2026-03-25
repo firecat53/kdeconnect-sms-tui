@@ -10,11 +10,9 @@ pub enum AppEvent {
     /// Terminal key press
     Key(KeyEvent),
     /// Terminal resize
-    Resize(u16, u16),
+    Resize,
     /// Periodic tick for UI refresh
     Tick,
-    /// D-Bus: device list changed
-    DevicesChanged,
     /// D-Bus: new conversation appeared
     ConversationCreated(Message),
     /// D-Bus: existing conversation updated (new message)
@@ -47,8 +45,8 @@ pub fn spawn_event_loop(tick_rate: std::time::Duration) -> mpsc::UnboundedReceiv
                                 break;
                             }
                         }
-                        Some(Ok(CrosstermEvent::Resize(w, h))) => {
-                            if tx.send(AppEvent::Resize(w, h)).is_err() {
+                        Some(Ok(CrosstermEvent::Resize(_, _))) => {
+                            if tx.send(AppEvent::Resize).is_err() {
                                 break;
                             }
                         }

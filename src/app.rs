@@ -396,7 +396,7 @@ impl App {
         signal_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
     ) {
         // Only try every 8 ticks (2 seconds)
-        if self.tick_count % 8 != 0 {
+        if !self.tick_count.is_multiple_of(8) {
             return;
         }
         // Already connected — nothing to do
@@ -638,7 +638,7 @@ impl App {
         // flicker because the escape sequences reposition the cursor.
         let mut needs_redraw = true;
         while !self.should_quit {
-            if needs_redraw {
+            if std::mem::take(&mut needs_redraw) {
                 if self.needs_full_repaint {
                     // Force a complete redraw so protocol-based images
                     // (Kitty/Sixel) are re-emitted after an overlay erased them.
@@ -648,7 +648,6 @@ impl App {
                 terminal.draw(|f| {
                     crate::ui::draw(f, self);
                 })?;
-                needs_redraw = false;
             }
 
             // Wait for either terminal or D-Bus signal events
@@ -683,15 +682,12 @@ impl App {
     ) {
         match event {
             AppEvent::Key(key) => self.handle_key(key, signal_tx).await,
-            AppEvent::Resize(_, _) => {}
+            AppEvent::Resize => {}
             AppEvent::Tick => {
                 self.tick_count = self.tick_count.wrapping_add(1);
                 self.reset_stale_loading_flags();
                 self.retry_connection_if_needed(signal_tx.clone()).await;
                 self.retry_message_loading_if_needed().await;
-            }
-            AppEvent::DevicesChanged => {
-                self.refresh_devices().await;
             }
             AppEvent::ConversationCreated(msg) => {
                 let thread_id = msg.thread_id;
@@ -997,7 +993,7 @@ impl App {
     /// AUTO_RESYNC_MAX times (every 2s) to avoid requiring manual 'r' presses.
     async fn retry_message_loading_if_needed(&mut self) {
         // Only act every 8 ticks (2 seconds)
-        if self.tick_count % 8 != 0 {
+        if !self.tick_count.is_multiple_of(8) {
             return;
         }
         // Don't poll the daemon right after sending a message.
@@ -2130,7 +2126,7 @@ impl App {
     /// Scroll up (toward older messages) by one message boundary.
     /// Number of selectable parts for a message: 1 (text) + N (attachments).
     fn message_part_count(msg: &Message) -> usize {
-        1 + msg.attachments.len()
+        1 + usize::from(msg.has_attachments()) * msg.attachments.len()
     }
 
     /// Move selection up (toward older messages / previous parts).
@@ -2215,7 +2211,7 @@ impl App {
         self.selected_conversation_idx
             .and_then(|i| self.conversations.get(i))
             .and_then(|c| c.messages.get(msg_idx))
-            .map(|m| Self::message_part_count(m))
+            .map(Self::message_part_count)
             .unwrap_or(1)
     }
 
@@ -2598,13 +2594,14 @@ fn clipboard_copy_image(path: &std::path::Path) {
 ///
 /// kdeconnect can deliver the same message multiple times — via both
 /// `conversationCreated` and `conversationUpdated` signals, or via signal
-/// + conversation reload.  The uid may differ between deliveries (e.g. 0
-/// before the phone assigns the real SMS ID), and the timestamp can shift
-/// by a few seconds between the queued and delivered states (especially
-/// for MMS).  We use multiple strategies:
+/// + conversation reload. The uid may differ between deliveries (e.g. 0
+///   before the phone assigns the real SMS ID), and the timestamp can shift
+///   by a few seconds between the queued and delivered states (especially
+///   for MMS). We use multiple strategies:
 ///   1. If the incoming uid > 0 and matches an existing uid → duplicate.
 ///   2. Same body + date within 5 seconds → duplicate (covers uid==0,
 ///      mismatched-uid, and MMS timestamp drift).
+///
 /// Insert a message and return the insertion index, or `None` if it was a
 /// duplicate.
 fn insert_message_sorted(messages: &mut Vec<Message>, msg: Message) -> Option<usize> {

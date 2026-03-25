@@ -156,6 +156,7 @@ impl ConversationsClient {
 
     /// Send a message to a new conversation (by address).
     /// If `attachment_path` is provided, it should be an absolute local file path.
+    #[expect(dead_code, reason = "Reserved for planned new-conversation compose flow")]
     pub async fn send_without_conversation(
         &self,
         addresses: &[String],

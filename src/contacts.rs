@@ -135,10 +135,6 @@ impl ContactStore {
         self.contacts.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.contacts.is_empty()
-    }
-
     fn vcard_dir() -> PathBuf {
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("~/.local/share"))
@@ -197,7 +193,7 @@ fn parse_vcard_contacts(content: &str, contacts: &mut HashMap<String, String>) {
 
         // TEL lines: TEL:+1234, TEL;TYPE=CELL:+1234, etc.
         if line.starts_with("TEL") {
-            if let Some(value) = line.split(':').last() {
+            if let Some(value) = line.split(':').next_back() {
                 let phone = value.trim();
                 if !phone.is_empty() {
                     current_phones.push(phone.to_string());
@@ -283,7 +279,7 @@ END:VCARD
     fn test_empty_dir() {
         let dir = TempDir::new().unwrap();
         let store = ContactStore::load_from_dir(dir.path()).unwrap();
-        assert!(store.is_empty());
+        assert_eq!(store.len(), 0);
     }
 
     #[test]

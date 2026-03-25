@@ -29,6 +29,7 @@ impl DaemonClient {
     }
 
     /// Get list of device IDs.
+    #[expect(dead_code, reason = "Reserved for planned device-resolution and compose workflows")]
     pub async fn device_ids(&self, only_reachable: bool, only_paired: bool) -> Result<Vec<String>> {
         let reply: Vec<String> = timeout(
             DBUS_TIMEOUT,

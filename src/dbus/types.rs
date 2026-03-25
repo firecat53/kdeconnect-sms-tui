@@ -180,13 +180,11 @@ fn parse_attachments_from_map(map: &HashMap<String, OwnedValue>) -> Vec<Attachme
     if let Ok(arr) = <Vec<HashMap<String, OwnedValue>>>::try_from(val.clone()) {
         return arr
             .iter()
-            .filter_map(|a| {
-                Some(Attachment {
-                    part_id: get_i64(a, "partID").unwrap_or(0),
-                    mime_type: get_string(a, "mimeType").unwrap_or_default(),
-                    unique_identifier: get_string(a, "uniqueIdentifier").unwrap_or_default(),
-                    cached_path: None,
-                })
+            .map(|a| Attachment {
+                part_id: get_i64(a, "partID").unwrap_or(0),
+                mime_type: get_string(a, "mimeType").unwrap_or_default(),
+                unique_identifier: get_string(a, "uniqueIdentifier").unwrap_or_default(),
+                cached_path: None,
             })
             .collect();
     }

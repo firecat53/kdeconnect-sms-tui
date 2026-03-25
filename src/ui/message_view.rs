@@ -181,21 +181,21 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             prev_date = Some(msg_date);
         }
 
-        let sender = if msg.is_incoming() {
+        let sender = if msg.is_outgoing() {
+            "You".to_string()
+        } else {
             let addr = msg
                 .addresses
                 .first()
                 .map(|a| a.address.as_str())
                 .unwrap_or("?");
             app.contacts.display_name(addr)
-        } else {
-            "You".to_string()
         };
 
-        let style = if msg.is_incoming() {
-            theme::incoming_message()
-        } else {
+        let style = if msg.is_outgoing() {
             theme::outgoing_message()
+        } else {
+            theme::incoming_message()
         };
 
         let time = msg.timestamp_display();
