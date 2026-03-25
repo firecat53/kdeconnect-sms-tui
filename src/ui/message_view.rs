@@ -435,13 +435,14 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                         f.render_stateful_widget(image_widget, img_area, protocol.as_mut());
                     }
                     if is_selected {
-                        // Draw a selection indicator after the image renders
-                        // so it doesn't get overwritten.  Use a left-edge bar
-                        // on each row of the image.
-                        for row in img_area.y..img_area.y + img_area.height {
-                            if let Some(cell) = f.buffer_mut().cell_mut((inner.x, row)) {
-                                cell.set_symbol("▌");
-                                cell.set_fg(Color::Cyan);
+                        // Draw a DarkGray vertical bar to the right of the image
+                        let bar_x = img_area.x + img_area.width;
+                        if bar_x < inner.x + inner_width {
+                            for row in img_area.y..img_area.y + img_area.height {
+                                if let Some(cell) = f.buffer_mut().cell_mut((bar_x, row)) {
+                                    cell.set_symbol("▐");
+                                    cell.set_fg(Color::DarkGray);
+                                }
                             }
                         }
                     }
