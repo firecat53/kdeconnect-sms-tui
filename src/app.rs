@@ -17,7 +17,6 @@ use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use tracing::info;
 
-use crate::config::Config;
 use crate::contacts::ContactStore;
 use crate::dbus::conversations::ConversationsClient;
 use crate::dbus::daemon::DaemonClient;
@@ -87,7 +86,6 @@ pub enum ImageState {
 }
 
 pub struct App {
-    pub config: Config,
     pub state: AppState,
     pub devices: Vec<Device>,
     pub selected_device_idx: Option<usize>,
@@ -176,7 +174,6 @@ pub struct App {
 
 impl App {
     pub async fn new(
-        config: Config,
         state: AppState,
         device_id: Option<String>,
         device_name: Option<String>,
@@ -197,7 +194,6 @@ impl App {
         };
 
         let mut app = Self {
-            config,
             state,
             devices: Vec::new(),
             selected_device_idx: None,
@@ -271,7 +267,6 @@ impl App {
     #[cfg(test)]
     pub fn new_test() -> Self {
         Self {
-            config: Config::default(),
             state: AppState::default(),
             devices: Vec::new(),
             selected_device_idx: None,

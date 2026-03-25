@@ -165,8 +165,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unicode-segmentation = "1"    # Proper emoji/grapheme handling
 unicode-width = "0.2"         # Display width calculation
-dirs = "6"                    # XDG paths for config/cache
-toml = "0.8"                  # Config file format
+dirs = "6"                    # XDG paths for state/cache
+toml = "0.8"                  # State file format
 clap = { version = "4", features = ["derive"] }  # CLI args
 color-eyre = "0.6"            # Error handling
 tracing = "0.1"               # Logging
@@ -182,7 +182,6 @@ vcard_parser = "0.2"           # Parse vCard contacts from kdeconnect
 src/
 ├── main.rs                   # Entry point, tokio runtime, arg parsing
 ├── app.rs                    # App state machine, event loop
-├── config.rs                 # Config file (~/.config/kdeconnect-sms-tui/config.toml)
 ├── state.rs                  # App state (~/.local/state/kdeconnect-sms-tui/state.toml)
 ├── dbus/
 │   ├── mod.rs
@@ -271,7 +270,6 @@ src/
 - [x] Keyboard shortcuts help overlay (?)
 - [ ] Search/filter conversations
 - [ ] Notification indicator for new messages (unread count)
-- [x] Config file for default device (`~/.config/kdeconnect-sms-tui/config.toml`)
 - [x] State file for group names, archive/spam lists (`~/.local/state/kdeconnect-sms-tui/state.toml`)
 - [x] Proper emoji rendering with grapheme cluster awareness
 - [x] Clipboard support for copying message text/attachments (`c` key)
@@ -280,7 +278,7 @@ src/
 - [x] Archive/spam folders with auto-restore on new incoming messages
 - [x] Panic hook to restore terminal on crash
 - [x] Safe string truncation (char-boundary-aware)
-- [x] **Tests**: Config parsing, state serialization
+- [x] **Tests**: State serialization
 
 ---
 
@@ -289,7 +287,7 @@ src/
 ### Unit Tests
 - **D-Bus type parsing**: Verify QVariant → Rust struct conversions for all message types
 - **Model logic**: Conversation sorting, group detection, attachment path resolution
-- **Config/State**: Parse/write config and state toml, handle missing/malformed files
+- **State**: Parse/write state toml, handle missing/malformed files
 - **UI state**: State machine transitions (selecting device → loading conversations → viewing messages)
 
 ### Integration Tests (require mock D-Bus or running kdeconnectd)
@@ -311,7 +309,7 @@ tests/
 │   └── mod.rs              # Shared test helpers, mock D-Bus setup
 ├── dbus_integration.rs     # Tests against mock/real D-Bus
 ├── ui_snapshot.rs          # ratatui TestBackend rendering tests
-└── config_test.rs          # Config parsing tests
+└── state_test.rs           # State serialization tests
 ```
 
 Each phase includes its own test requirements marked above. Tests should be written alongside implementation, not after.

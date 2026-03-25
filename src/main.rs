@@ -1,5 +1,4 @@
 mod app;
-mod config;
 mod contacts;
 mod dbus;
 mod events;
@@ -60,9 +59,8 @@ async fn main() -> Result<()> {
             .init();
     }
 
-    let config = config::Config::load()?;
     let state = state::AppState::load()?;
 
-    let mut app = app::App::new(config, state, args.device, args.name).await?;
+    let mut app = app::App::new(state, args.device, args.name).await?;
     app.run().await
 }

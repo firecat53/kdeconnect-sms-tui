@@ -119,19 +119,11 @@ qdbus org.kde.kdeconnect /modules/kdeconnect org.kde.kdeconnect.daemon.devices
 kdeconnect-cli -l
 ```
 
-## Configuration
-
-Config file: `~/.config/kdeconnect-sms-tui/config.toml`
-
-```toml
-default_device = "device_id_here"
-```
-
 ## State
 
 Application state (group names, archived/spam thread lists) is stored
-separately from config at `~/.local/state/kdeconnect-sms-tui/state.toml`
-(`$XDG_STATE_HOME`). This file is managed automatically by the app.
+at `~/.local/state/kdeconnect-sms-tui/state.toml` (`$XDG_STATE_HOME`).
+This file is managed automatically by the app.
 
 ## Contacts
 
