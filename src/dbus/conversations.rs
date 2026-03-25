@@ -4,7 +4,7 @@ use std::time::Duration;
 use color_eyre::Result;
 use tokio::time::timeout;
 use tracing::{debug, info};
-use zbus::zvariant::OwnedValue;
+use zbus::zvariant::{OwnedValue, Structure, Value};
 use zbus::Connection;
 
 use crate::dbus::types::parse_message_from_value;
@@ -114,13 +114,19 @@ impl ConversationsClient {
     }
 
     /// Reply to an existing conversation thread.
+    /// If `attachment` is `Some((mime_type, base64_data))`, it is sent as an MMS attachment.
     pub async fn reply_to_conversation(
         &self,
         thread_id: i64,
         message: &str,
+        attachment: Option<(&str, &str)>,
     ) -> Result<()> {
         // QVariantList maps to D-Bus type `av` (array of variants)
-        let attachments: Vec<zbus::zvariant::Value<'_>> = Vec::new();
+        let attachments: Vec<Value<'_>> = if let Some((mime, data)) = attachment {
+            vec![Value::from(Structure::from((0i64, mime.to_string(), data.to_string(), String::new())))]
+        } else {
+            Vec::new()
+        };
         timeout(DBUS_TIMEOUT, self.connection
             .call_method(
                 Some(KDECONNECT_SERVICE),
@@ -136,13 +142,19 @@ impl ConversationsClient {
     }
 
     /// Send a message to a new conversation (by address).
+    /// If `attachment` is `Some((mime_type, base64_data))`, it is sent as an MMS attachment.
     pub async fn send_without_conversation(
         &self,
         addresses: &[String],
         message: &str,
+        attachment: Option<(&str, &str)>,
     ) -> Result<()> {
         // QVariantList maps to D-Bus type `av` (array of variants)
-        let attachments: Vec<zbus::zvariant::Value<'_>> = Vec::new();
+        let attachments: Vec<Value<'_>> = if let Some((mime, data)) = attachment {
+            vec![Value::from(Structure::from((0i64, mime.to_string(), data.to_string(), String::new())))]
+        } else {
+            Vec::new()
+        };
         timeout(DBUS_TIMEOUT, self.connection
             .call_method(
                 Some(KDECONNECT_SERVICE),

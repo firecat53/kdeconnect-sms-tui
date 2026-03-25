@@ -10,7 +10,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let is_focused = app.focus == Focus::Compose;
 
     let title = if is_focused {
-        " Compose (Esc: back, Enter: send) "
+        " Compose (Esc: back, Enter: send, Alt+A: attach) "
     } else {
         " Compose "
     };
@@ -27,7 +27,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .title_style(if is_focused { theme::title_style() } else { theme::help_style() })
         .border_style(border_style);
 
-    if app.compose_input.is_empty() && !is_focused {
+    let has_attachment = app.pending_attachment.is_some();
+
+    if app.compose_input.is_empty() && !is_focused && !has_attachment {
         let placeholder = Paragraph::new(Span::styled(
             "Type a message...",
             theme::help_style(),
@@ -37,18 +39,40 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // Render the block first
+    f.render_widget(block, area);
+    let inner = inner_rect(area);
+
+    // Render attachment indicator if present (takes one line)
+    let text_y_offset: u16 = if let Some((ref path, _)) = app.pending_attachment {
+        let filename = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file");
+        let label = format!("[Attached: {}] (Alt+X: remove)", filename);
+        let attach_area = Rect::new(inner.x, inner.y, inner.width, 1);
+        let attach_line = Paragraph::new(Span::styled(label, theme::help_style()));
+        f.render_widget(attach_line, attach_area);
+        1
+    } else {
+        0
+    };
+
+    // Render message text below the attachment line
+    let text_area = Rect::new(
+        inner.x,
+        inner.y + text_y_offset,
+        inner.width,
+        inner.height.saturating_sub(text_y_offset),
+    );
     let text = &app.compose_input;
     let paragraph = Paragraph::new(text.as_str())
-        .block(block)
         .wrap(Wrap { trim: false });
-
-    f.render_widget(paragraph, area);
+    f.render_widget(paragraph, text_area);
 
     // Show cursor when focused
     if is_focused {
-        let inner = inner_rect(area);
         let (cx, cy) = cursor_position(text, app.compose_cursor, inner.width as usize);
-        f.set_cursor_position((inner.x + cx as u16, inner.y + cy as u16));
+        f.set_cursor_position((inner.x + cx as u16, inner.y + text_y_offset + cy as u16));
     }
 }
 

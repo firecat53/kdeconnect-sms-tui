@@ -57,6 +57,7 @@ pub enum Focus {
     DevicePopup,
     GroupInfoPopup,
     FolderPopup,
+    FilePickerPopup,
     HelpPopup,
 }
 
@@ -144,6 +145,14 @@ pub struct App {
     pub folder_popup_kind: FolderKind,
     /// Selected index in the folder popup list
     pub folder_popup_idx: usize,
+    /// Pending outgoing attachment (file path + MIME type), cleared on send
+    pub pending_attachment: Option<(PathBuf, String)>,
+    /// File picker: current directory being browsed
+    pub file_picker_dir: PathBuf,
+    /// File picker: list of entries in current directory (dirs first, then files)
+    pub file_picker_entries: Vec<PathBuf>,
+    /// File picker: selected index in the entries list
+    pub file_picker_idx: usize,
     /// Request a full terminal repaint on the next draw cycle.
     /// Set when dismissing overlays (e.g. device popup) that may have
     /// erased protocol-based images (Kitty/Sixel).
@@ -213,6 +222,10 @@ impl App {
             group_name_cursor: 0,
             folder_popup_kind: FolderKind::Archive,
             folder_popup_idx: 0,
+            pending_attachment: None,
+            file_picker_dir: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+            file_picker_entries: Vec::new(),
+            file_picker_idx: 0,
             needs_full_repaint: false,
             connected_at_ms: 0,
         };
@@ -286,6 +299,10 @@ impl App {
             group_name_cursor: 0,
             folder_popup_kind: FolderKind::Archive,
             folder_popup_idx: 0,
+            pending_attachment: None,
+            file_picker_dir: PathBuf::from("/"),
+            file_picker_entries: Vec::new(),
+            file_picker_idx: 0,
             needs_full_repaint: false,
             connected_at_ms: 0,
         }
@@ -1304,6 +1321,7 @@ impl App {
             Focus::DevicePopup => self.handle_key_device_popup(key, signal_tx).await,
             Focus::GroupInfoPopup => self.handle_key_group_info(key),
             Focus::FolderPopup => self.handle_key_folder_popup(key),
+            Focus::FilePickerPopup => self.handle_key_file_picker(key),
             Focus::HelpPopup => {
                 // Any key dismisses the help popup
                 self.focus = Focus::ConversationList;
@@ -1580,6 +1598,18 @@ impl App {
             }
             KeyCode::End => {
                 self.compose_cursor = self.compose_input.len();
+            }
+
+            // Attach image (Alt+A)
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.file_picker_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+                crate::ui::file_picker_popup::refresh_file_picker_entries(self);
+                self.focus = Focus::FilePickerPopup;
+            }
+
+            // Remove attachment (Alt+X)
+            KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.pending_attachment = None;
             }
 
             // Text input
@@ -1902,6 +1932,63 @@ impl App {
         }
     }
 
+    fn handle_key_file_picker(&mut self, key: KeyEvent) {
+        // Total entries = 1 ("../") + file_picker_entries.len()
+        let total = 1 + self.file_picker_entries.len();
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.focus = Focus::Compose;
+                self.needs_full_repaint = true;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.file_picker_idx > 0 {
+                    self.file_picker_idx -= 1;
+                } else {
+                    self.file_picker_idx = total.saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.file_picker_idx + 1 < total {
+                    self.file_picker_idx += 1;
+                } else {
+                    self.file_picker_idx = 0;
+                }
+            }
+            KeyCode::Backspace => {
+                // Navigate to parent directory
+                if let Some(parent) = self.file_picker_dir.parent() {
+                    self.file_picker_dir = parent.to_path_buf();
+                    crate::ui::file_picker_popup::refresh_file_picker_entries(self);
+                }
+            }
+            KeyCode::Enter => {
+                if self.file_picker_idx == 0 {
+                    // "../" — go to parent
+                    if let Some(parent) = self.file_picker_dir.parent() {
+                        self.file_picker_dir = parent.to_path_buf();
+                        crate::ui::file_picker_popup::refresh_file_picker_entries(self);
+                    }
+                } else {
+                    let entry_idx = self.file_picker_idx - 1;
+                    if let Some(path) = self.file_picker_entries.get(entry_idx).cloned() {
+                        if path.is_dir() {
+                            self.file_picker_dir = path;
+                            crate::ui::file_picker_popup::refresh_file_picker_entries(self);
+                        } else {
+                            // Selected an image file
+                            let mime = crate::ui::file_picker_popup::mime_from_path(&path);
+                            self.pending_attachment = Some((path, mime));
+                            self.focus = Focus::Compose;
+                            self.needs_full_repaint = true;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Returns the list of thread_ids for the currently open folder popup.
     pub fn folder_thread_ids(&self) -> Vec<i64> {
         let mut ids = match self.folder_popup_kind {
@@ -2023,6 +2110,8 @@ impl App {
 
     /// Save current compose input as a draft for the current conversation.
     fn save_draft(&mut self) {
+        // Attachments are not saved as drafts — clear on conversation switch.
+        self.pending_attachment = None;
         if let Some(idx) = self.selected_conversation_idx {
             if let Some(conv) = self.conversations.get(idx) {
                 let thread_id = conv.thread_id;
@@ -2050,10 +2139,12 @@ impl App {
         }
     }
 
-    /// Send the current compose input as a reply.
+    /// Send the current compose input as a reply, optionally with an image attachment.
     async fn send_message(&mut self) {
+        use base64::Engine;
+
         let text = self.compose_input.trim().to_string();
-        if text.is_empty() {
+        if text.is_empty() && self.pending_attachment.is_none() {
             return;
         }
 
@@ -2071,10 +2162,30 @@ impl App {
 
         let thread_id = conv.thread_id;
 
-        match client.reply_to_conversation(thread_id, &text).await {
+        // Encode attachment if present
+        let attachment_data = if let Some((ref path, ref mime)) = self.pending_attachment {
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    Some((mime.clone(), b64))
+                }
+                Err(e) => {
+                    self.status_message = Some(format!("Failed to read attachment: {}", e));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
+        let attachment_arg = attachment_data.as_ref()
+            .map(|(mime, data)| (mime.as_str(), data.as_str()));
+
+        match client.reply_to_conversation(thread_id, &text, attachment_arg).await {
             Ok(()) => {
                 self.compose_input.clear();
                 self.compose_cursor = 0;
+                self.pending_attachment = None;
                 self.drafts.remove(&thread_id);
                 self.status_message = Some("Message sent".into());
                 // Start the post-send cooldown to prevent daemon polling
