@@ -248,21 +248,20 @@ src/
 - [x] `requestAttachmentFile()` + `attachmentReceived` signal flow
 - [x] Uses kdeconnect's built-in cache (`~/.cache/kdeconnect/{device_name}/`)
 - [x] Non-image attachments: open via `xdg-open` on keypress
-- [ ] Allow selecting and downloading/saving images to a chosen path
+- [x] Allow selecting and downloading/saving images to a chosen path
 - [x] Attachment picker for sending (file browser dialog or path input)
-- [ ] **Tests**: attachment download/cache
+- [x] **Tests**: attachment download/cache
 
 ### Phase 5: Group Messages & Replies
 - [x] Handle multi-address conversations (group detection via address count)
 - [x] Display group member list
 - [x] Group rename functionality (stored in state file)
-- [ ] Reply context (quote/reference previous message if supported)
 - [x] **Tests**: Group detection
 
 ### Phase 6: Device Switching
 - [x] Top bar showing current device with selection indicator
 - [x] Switch device → reload conversations (Tab key)
-- [ ] Handle device going offline (signal monitoring — `deviceListChanged` not yet listened for)
+- [x] Handle device going offline (signal monitoring — `deviceListChanged` not yet listened for)
 - [x] Auto-select first available device on startup
 - [x] **Tests**: Device switch state transitions
 
