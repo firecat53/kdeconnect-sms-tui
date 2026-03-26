@@ -88,6 +88,7 @@ pub enum ImageState {
 pub struct App {
     pub state: AppState,
     pub devices: Vec<Device>,
+    pub selected_device_id: Option<String>,
     pub selected_device_idx: Option<usize>,
     pub conversations: Vec<Conversation>,
     pub selected_conversation_idx: Option<usize>,
@@ -196,6 +197,7 @@ impl App {
         let mut app = Self {
             state,
             devices: Vec::new(),
+            selected_device_id: None,
             selected_device_idx: None,
             conversations: Vec::new(),
             selected_conversation_idx: None,
@@ -247,7 +249,8 @@ impl App {
                 .await
             {
                 Ok(Some(dev)) => {
-                    app.selected_device_idx = app.devices.iter().position(|d| d.id == dev.id);
+                    app.selected_device_id = Some(dev.id);
+                    app.sync_selected_device_selection();
                 }
                 Ok(None) => {
                     app.status_message = Some("No reachable device found".into());
@@ -269,6 +272,7 @@ impl App {
         Self {
             state: AppState::default(),
             devices: Vec::new(),
+            selected_device_id: None,
             selected_device_idx: None,
             conversations: Vec::new(),
             selected_conversation_idx: None,
@@ -317,10 +321,14 @@ impl App {
         if let Some(ref daemon) = self.daemon {
             match daemon.discover_devices().await {
                 Ok(devices) => {
+                    let selected_id = self.selected_device_id.clone().or_else(|| {
+                        self.selected_device_idx
+                            .and_then(|i| self.devices.get(i))
+                            .map(|d| d.id.clone())
+                    });
                     self.devices = devices;
-                    if self.selected_device_idx.is_none() && !self.devices.is_empty() {
-                        self.selected_device_idx = Some(0);
-                    }
+                    self.selected_device_id = selected_id;
+                    self.sync_selected_device_selection();
                 }
                 Err(e) => {
                     tracing::warn!("Failed to discover devices: {}", e);
@@ -404,10 +412,10 @@ impl App {
             return;
         }
         // No device selected — nothing to connect to
-        if self.selected_device_idx.is_none() {
+        if self.selected_device().is_none() {
             // Try to discover devices first
             self.refresh_devices().await;
-            if self.selected_device_idx.is_none() {
+            if self.selected_device().is_none() {
                 return;
             }
         }
@@ -587,8 +595,39 @@ impl App {
         }
     }
 
+    pub fn selected_device_index(&self) -> Option<usize> {
+        self.selected_device_id
+            .as_ref()
+            .and_then(|id| self.devices.iter().position(|d| d.id == *id))
+            .or_else(|| self.selected_device_idx.filter(|&i| i < self.devices.len()))
+    }
+
     pub fn selected_device(&self) -> Option<&Device> {
-        self.selected_device_idx.and_then(|i| self.devices.get(i))
+        self.selected_device_index().and_then(|i| self.devices.get(i))
+    }
+
+    fn sync_selected_device_selection(&mut self) {
+        if let Some(id) = self.selected_device_id.as_ref() {
+            if let Some(idx) = self.devices.iter().position(|d| d.id == *id) {
+                self.selected_device_idx = Some(idx);
+                return;
+            }
+        }
+
+        if let Some(idx) = self.selected_device_idx {
+            if let Some(device) = self.devices.get(idx) {
+                self.selected_device_id = Some(device.id.clone());
+                return;
+            }
+        }
+
+        if let Some(device) = self.devices.first() {
+            self.selected_device_idx = Some(0);
+            self.selected_device_id = Some(device.id.clone());
+        } else {
+            self.selected_device_idx = None;
+            self.selected_device_id = None;
+        }
     }
 
     pub async fn run(&mut self) -> Result<()> {
@@ -1249,6 +1288,7 @@ impl App {
 
     /// Request downloads for all image attachments in the currently selected conversation.
     fn request_conversation_attachments(&mut self) {
+        let selected_device_name = self.selected_device().map(|device| device.name.clone());
         let Some(idx) = self.selected_conversation_idx else {
             return;
         };
@@ -1258,11 +1298,11 @@ impl App {
 
         // Scan the kdeconnect cache directory for files that already exist on
         // disk but whose cached_path hasn't been set (e.g. from a prior session).
-        if let Some(device) = self.selected_device_idx.and_then(|i| self.devices.get(i)) {
+        if let Some(device_name) = selected_device_name {
             let cache_dir = dirs::cache_dir()
                 .unwrap_or_else(|| PathBuf::from("~/.cache"))
                 .join("kdeconnect.daemon")
-                .join(&device.name);
+                .join(device_name);
             if cache_dir.is_dir() {
                 for msg in &mut conv.messages {
                     for att in &mut msg.attachments {
@@ -1477,7 +1517,7 @@ impl App {
             // Device popup
             KeyCode::Char('d') => {
                 if !self.devices.is_empty() {
-                    self.device_popup_idx = self.selected_device_idx.unwrap_or(0);
+                    self.device_popup_idx = self.selected_device_index().unwrap_or(0);
                     self.focus = Focus::DevicePopup;
                 }
             }
@@ -1486,7 +1526,7 @@ impl App {
             KeyCode::Char('r') => {
                 if self.conversations_client.is_none() {
                     self.refresh_devices().await;
-                    if self.selected_device_idx.is_some() {
+                    if self.selected_device().is_some() {
                         self.connect_to_device(signal_tx).await;
                     }
                 } else {
@@ -1584,7 +1624,7 @@ impl App {
             // Device popup
             KeyCode::Char('d') => {
                 if !self.devices.is_empty() {
-                    self.device_popup_idx = self.selected_device_idx.unwrap_or(0);
+                    self.device_popup_idx = self.selected_device_index().unwrap_or(0);
                     self.focus = Focus::DevicePopup;
                 }
             }
@@ -1593,7 +1633,7 @@ impl App {
             KeyCode::Char('r') => {
                 if self.conversations_client.is_none() {
                     self.refresh_devices().await;
-                    if self.selected_device_idx.is_some() {
+                    if self.selected_device().is_some() {
                         self.connect_to_device(signal_tx).await;
                     }
                 } else {
@@ -1730,7 +1770,7 @@ impl App {
             // Select device
             KeyCode::Enter => {
                 let new_idx = self.device_popup_idx;
-                if self.selected_device_idx != Some(new_idx) {
+                if self.selected_device_index() != Some(new_idx) {
                     self.select_device(new_idx);
                     self.connect_to_device(signal_tx).await;
                 }
@@ -1744,6 +1784,10 @@ impl App {
 
     /// Switch to a specific device by index, resetting conversation state.
     fn select_device(&mut self, idx: usize) {
+        let Some(device) = self.devices.get(idx) else {
+            return;
+        };
+        self.selected_device_id = Some(device.id.clone());
         self.selected_device_idx = Some(idx);
         self.conversations.clear();
         self.selected_conversation_idx = None;
@@ -2665,12 +2709,43 @@ mod tests {
             },
         ];
         app.selected_device_idx = Some(0);
+        app.selected_device_id = Some("a".into());
 
         app.select_device(1);
         assert_eq!(app.selected_device_idx, Some(1));
+        assert_eq!(app.selected_device_id.as_deref(), Some("b"));
 
         app.select_device(0);
         assert_eq!(app.selected_device_idx, Some(0));
+        assert_eq!(app.selected_device_id.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn test_selected_device_survives_device_reorder() {
+        let mut app = App::new_test();
+        app.devices = vec![
+            Device {
+                id: "a".into(),
+                name: "Phone A".into(),
+                reachable: true,
+                paired: true,
+            },
+            Device {
+                id: "b".into(),
+                name: "Phone B".into(),
+                reachable: true,
+                paired: true,
+            },
+        ];
+
+        app.select_device(1);
+        assert_eq!(app.selected_device().map(|d| d.id.as_str()), Some("b"));
+
+        app.devices.swap(0, 1);
+        app.sync_selected_device_selection();
+
+        assert_eq!(app.selected_device_idx, Some(0));
+        assert_eq!(app.selected_device().map(|d| d.id.as_str()), Some("b"));
     }
 
     #[test]
@@ -2725,6 +2800,7 @@ mod tests {
             },
         ];
         app.selected_device_idx = Some(0);
+        app.selected_device_id = Some("a".into());
         app.conversations = vec![Conversation::new(1)];
         app.selected_conversation_idx = Some(0);
 
@@ -3041,6 +3117,7 @@ mod tests {
             },
         ];
         app.selected_device_idx = Some(0);
+        app.selected_device_id = Some("a".into());
         app.focus = Focus::Compose;
         app.compose_input = "draft message".into();
         app.compose_cursor = 13;
@@ -3101,6 +3178,7 @@ mod tests {
             },
         ];
         app.selected_device_idx = Some(0);
+        app.selected_device_id = Some("a".into());
         app.conversations = vec![Conversation::new(1)];
         app.selected_conversation_idx = Some(0);
         app.drafts.insert(1, ("hello".into(), 5));
@@ -3134,6 +3212,7 @@ mod tests {
             },
         ];
         app.selected_device_idx = Some(0);
+        app.selected_device_id = Some("a".into());
         app.device_popup_idx = 0;
 
         // Navigate down

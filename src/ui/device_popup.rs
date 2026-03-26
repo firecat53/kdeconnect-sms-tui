@@ -35,12 +35,11 @@ pub fn draw(f: &mut Frame, app: &App) {
             } else {
                 theme::status_unavailable()
             };
-            let marker =
-                if app.selected_device_idx == app.devices.iter().position(|d| d.id == device.id) {
-                    Span::styled("* ", style.add_modifier(Modifier::BOLD))
-                } else {
-                    Span::raw("  ")
-                };
+            let marker = if app.selected_device().is_some_and(|d| d.id == device.id) {
+                Span::styled("* ", style.add_modifier(Modifier::BOLD))
+            } else {
+                Span::raw("  ")
+            };
             ListItem::new(Line::from(vec![
                 marker,
                 Span::styled(&device.name, style),
@@ -88,6 +87,7 @@ mod tests {
             },
         ];
         app.selected_device_idx = Some(0);
+        app.selected_device_id = Some("a".into());
         app.device_popup_idx = 0;
         app.focus = Focus::DevicePopup;
 
