@@ -9,6 +9,8 @@ use crate::models::message::Message;
 pub enum AppEvent {
     /// Terminal key press
     Key(KeyEvent),
+    /// Bracketed paste (multiline text pasted in one go)
+    Paste(String),
     /// Terminal resize
     Resize,
     /// Periodic tick for UI refresh
@@ -47,6 +49,11 @@ pub fn spawn_event_loop(tick_rate: std::time::Duration) -> mpsc::UnboundedReceiv
                         }
                         Some(Ok(CrosstermEvent::Resize(_, _))) => {
                             if tx.send(AppEvent::Resize).is_err() {
+                                break;
+                            }
+                        }
+                        Some(Ok(CrosstermEvent::Paste(text))) => {
+                            if tx.send(AppEvent::Paste(text)).is_err() {
                                 break;
                             }
                         }

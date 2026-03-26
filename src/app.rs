@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use color_eyre::Result;
 use crossterm::event::{
-    KeyCode, KeyEvent, KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, EnableBracketedPaste, KeyCode, KeyEvent, KeyModifiers,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -686,6 +686,10 @@ impl App {
             stdout,
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
         );
+        // Enable bracketed paste so multiline paste is delivered as a single
+        // Event::Paste instead of individual key events (which would send each
+        // line as a separate message).
+        let _ = execute!(stdout, EnableBracketedPaste);
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -705,6 +709,7 @@ impl App {
 
         // Always restore terminal, even on error
         let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+        let _ = execute!(terminal.backend_mut(), DisableBracketedPaste);
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()?;
@@ -773,6 +778,7 @@ impl App {
     ) {
         match event {
             AppEvent::Key(key) => self.handle_key(key, signal_tx).await,
+            AppEvent::Paste(text) => self.handle_paste(text),
             AppEvent::Resize => {}
             AppEvent::Tick => {
                 self.tick_count = self.tick_count.wrapping_add(1);
@@ -1474,6 +1480,24 @@ impl App {
                     }
                 }
             });
+        }
+    }
+
+    /// Handle bracketed paste events — inserts the full pasted text at the
+    /// cursor in whichever text input is currently focused.
+    fn handle_paste(&mut self, text: String) {
+        match self.focus {
+            Focus::Compose => {
+                self.compose_input.insert_str(self.compose_cursor, &text);
+                self.compose_cursor += text.len();
+            }
+            Focus::GroupInfoPopup => {
+                // Only take the first line for the group name field.
+                let line = text.lines().next().unwrap_or(&text);
+                self.group_name_input.insert_str(self.group_name_cursor, line);
+                self.group_name_cursor += line.len();
+            }
+            _ => {}
         }
     }
 
