@@ -113,6 +113,8 @@ pub struct App {
     pub should_quit: bool,
     pub loading: LoadingState,
     pub status_message: Option<String>,
+    /// When the current status message should be auto-cleared.
+    pub status_message_expiry: Option<std::time::Instant>,
     pub focus: Focus,
     /// Which panel was focused before entering Compose mode (to restore on Esc).
     pub pre_compose_focus: Focus,
@@ -218,6 +220,7 @@ impl App {
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
+            status_message_expiry: None,
             focus: Focus::ConversationList,
             pre_compose_focus: Focus::ConversationList,
             compose_input: String::new(),
@@ -262,7 +265,7 @@ impl App {
                     app.sync_selected_device_selection();
                 }
                 Ok(None) => {
-                    app.status_message = Some("No reachable device found".into());
+                    app.set_status("No reachable device found");
                 }
                 Err(e) => {
                     tracing::warn!("Failed to resolve device: {}", e);
@@ -296,6 +299,7 @@ impl App {
             should_quit: false,
             loading: LoadingState::Idle,
             status_message: None,
+            status_message_expiry: None,
             focus: Focus::ConversationList,
             pre_compose_focus: Focus::ConversationList,
             compose_input: String::new(),
@@ -352,12 +356,12 @@ impl App {
     async fn connect_to_device(&mut self, signal_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>) {
         let device = self.selected_device().cloned();
         let Some(device) = device else {
-            self.status_message = Some("No device selected".into());
+            self.set_status("No device selected");
             return;
         };
 
         if !device.is_available() {
-            self.status_message = Some(format!("{} is not reachable", device.name));
+            self.set_status(format!("{} is not reachable", device.name));
             return;
         }
 
@@ -388,7 +392,7 @@ impl App {
                 self.signal_listener_handle = Some(handle);
             }
             Err(e) => {
-                self.status_message = Some(format!("Signal listener failed: {}", e));
+                self.set_status(format!("Signal listener failed: {}", e));
                 return;
             }
         }
@@ -398,7 +402,7 @@ impl App {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        self.status_message = Some(format!("Connected to {}", device.name));
+        self.set_status(format!("Connected to {}", device.name));
         // kdeconnectd progressively discovers messages from the phone across
         // multiple requestAllConversationThreads calls.  Schedule a few
         // automatic re-syncs so the user doesn't have to press 'r' manually.
@@ -443,12 +447,12 @@ impl App {
         // Don't hit the phone right after sending — it can cause the
         // Android kdeconnect plugin to re-send the outgoing message.
         if self.in_send_cooldown() {
-            self.status_message = Some("Waiting for send to complete...".into());
+            self.set_status("Waiting for send to complete...");
             return;
         }
 
         self.loading = LoadingState::Loading;
-        self.status_message = Some("Loading conversations...".into());
+        self.set_status("Loading conversations...");
 
         // First request the phone to send all threads
         let request_result = self
@@ -459,7 +463,7 @@ impl App {
             .await;
         if let Err(e) = request_result {
             self.loading = LoadingState::Error(format!("Failed to request threads: {}", e));
-            self.status_message = Some(format!("Error: {}", e));
+            self.set_status(format!("Error: {}", e));
             // Connection may be stale — drop client so retry can reconnect.
             self.conversations_client = None;
             return;
@@ -494,7 +498,7 @@ impl App {
                 self.loading = LoadingState::Idle;
 
                 let count = self.conversations.len();
-                self.status_message = Some(format!("{} conversations loaded", count));
+                self.set_status_bg(format!("{} conversations loaded", count));
 
                 // Auto-select first visible if none selected, and request its messages
                 if self.selected_conversation_idx.is_none() && !self.conversations.is_empty() {
@@ -505,7 +509,7 @@ impl App {
             }
             Err(e) => {
                 self.loading = LoadingState::Error(format!("Failed to load: {}", e));
-                self.status_message = Some(format!("Error: {}", e));
+                self.set_status(format!("Error: {}", e));
                 // Connection may be stale — drop client so retry can reconnect.
                 self.conversations_client = None;
             }
@@ -556,7 +560,7 @@ impl App {
                 self.loading = LoadingState::Idle;
 
                 let count = self.conversations.len();
-                self.status_message = Some(format!("{} conversations loaded", count));
+                self.set_status_bg(format!("{} conversations loaded", count));
 
                 if self.selected_conversation_idx.is_none() && !self.conversations.is_empty() {
                     let first_visible = self.visible_conversation_indices().first().copied();
@@ -565,7 +569,7 @@ impl App {
                 }
             }
             Err(e) => {
-                self.status_message = Some(format!("Refresh error: {}", e));
+                self.set_status(format!("Refresh error: {}", e));
                 // Connection may be stale — drop client so retry can reconnect.
                 self.conversations_client = None;
             }
@@ -603,6 +607,36 @@ impl App {
         for conv in &mut self.conversations {
             conv.loading_more_messages = false;
             conv.loading_started_tick = None;
+        }
+    }
+
+    /// Set a status-bar message that auto-clears after 5 seconds.
+    fn set_status(&mut self, msg: impl Into<String>) {
+        self.status_message = Some(msg.into());
+        self.status_message_expiry =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+    }
+
+    /// Set a low-priority status message.  If a previous message has not yet
+    /// expired (e.g. a user-triggered action like download/copy), this is a
+    /// no-op so the earlier message stays visible.
+    fn set_status_bg(&mut self, msg: impl Into<String>) {
+        if self
+            .status_message_expiry
+            .is_some_and(|exp| std::time::Instant::now() < exp)
+        {
+            return;
+        }
+        self.set_status(msg);
+    }
+
+    /// Clear the status message if its expiry has passed.
+    fn expire_status_message(&mut self) {
+        if let Some(expiry) = self.status_message_expiry {
+            if std::time::Instant::now() >= expiry {
+                self.status_message = None;
+                self.status_message_expiry = None;
+            }
         }
     }
 
@@ -742,6 +776,7 @@ impl App {
             AppEvent::Resize => {}
             AppEvent::Tick => {
                 self.tick_count = self.tick_count.wrapping_add(1);
+                self.expire_status_message();
                 self.reset_stale_loading_flags();
                 self.retry_connection_if_needed(signal_tx.clone()).await;
                 self.retry_message_loading_if_needed().await;
@@ -1639,6 +1674,11 @@ impl App {
                 self.copy_selected_to_clipboard();
             }
 
+            // Download selected image to XDG_DOWNLOAD_DIR
+            KeyCode::Char('D') => {
+                self.download_selected_attachment();
+            }
+
             // Device popup
             KeyCode::Char('d') => {
                 if !self.devices.is_empty() {
@@ -1927,7 +1967,7 @@ impl App {
                             self.state.group_names.insert(tid, name);
                         }
                         if let Err(e) = self.state.save() {
-                            self.status_message = Some(format!("Failed to save state: {}", e));
+                            self.set_status(format!("Failed to save state: {}", e));
                         }
                     }
                 }
@@ -2078,7 +2118,7 @@ impl App {
         let thread_id = conv.thread_id;
         self.state.toggle_archived(thread_id);
         if let Err(e) = self.state.save() {
-            self.status_message = Some(format!("Failed to save state: {}", e));
+            self.set_status(format!("Failed to save state: {}", e));
         }
         // Move selection to next visible conversation
         self.adjust_selection_after_hide();
@@ -2094,7 +2134,7 @@ impl App {
         let thread_id = conv.thread_id;
         self.state.toggle_spam(thread_id);
         if let Err(e) = self.state.save() {
-            self.status_message = Some(format!("Failed to save state: {}", e));
+            self.set_status(format!("Failed to save state: {}", e));
         }
         self.adjust_selection_after_hide();
     }
@@ -2141,7 +2181,7 @@ impl App {
                     // Restore conversation and select it
                     self.state.unarchive(thread_id);
                     if let Err(e) = self.state.save() {
-                        self.status_message = Some(format!("Failed to save state: {}", e));
+                        self.set_status(format!("Failed to save state: {}", e));
                     }
                     // Select the restored conversation
                     if let Some(pos) = self
@@ -2389,14 +2429,14 @@ impl App {
         }
 
         let Some(idx) = self.selected_conversation_idx else {
-            self.status_message = Some("No conversation selected".into());
+            self.set_status("No conversation selected");
             return;
         };
         let Some(conv) = self.conversations.get(idx) else {
             return;
         };
         let Some(client) = self.conversations_client.as_ref() else {
-            self.status_message = Some("Not connected to device".into());
+            self.set_status("Not connected to device");
             return;
         };
         let connection = client.connection().clone();
@@ -2413,7 +2453,7 @@ impl App {
         let attachment_arg = file_path_str.as_deref();
 
         self.begin_send_protection();
-        self.status_message = Some("Sending message...".into());
+        self.set_status("Sending message...");
         let client = ConversationsClient::new(connection, device_id);
         match client
             .reply_to_conversation(thread_id, &text, attachment_arg)
@@ -2425,10 +2465,10 @@ impl App {
                 self.compose_scroll = 0;
                 self.pending_attachment = None;
                 self.drafts.remove(&thread_id);
-                self.status_message = Some("Message sent".into());
+                self.set_status("Message sent");
             }
             Err(e) => {
-                self.status_message = Some(format!("Send failed: {}", e));
+                self.set_status(format!("Send failed: {}", e));
             }
         }
     }
@@ -2520,18 +2560,18 @@ impl App {
                         .stderr(std::process::Stdio::null())
                         .spawn();
                 });
-                self.status_message = Some("Opening attachment...".into());
+                self.set_status("Opening attachment...");
                 return true;
             }
         }
 
         if !is_image {
-            self.status_message = Some(format!(
+            self.set_status(format!(
                 "Non-image attachments ({}) are not supported by kdeconnectd",
                 mime_type
             ));
         } else {
-            self.status_message = Some("Attachment not downloaded yet".into());
+            self.set_status("Attachment not downloaded yet");
         }
         true // still an attachment, just not cached — don't fall through to compose
     }
@@ -2551,7 +2591,7 @@ impl App {
         match att_info {
             None => {
                 clipboard_copy_text(&body);
-                self.status_message = Some("Message copied".into());
+                self.set_status("Message copied");
             }
             Some((mime, is_image, cached_path)) => {
                 if let Some(path) = cached_path {
@@ -2559,33 +2599,100 @@ impl App {
                         if mime.starts_with("text/") {
                             if let Ok(text) = std::fs::read_to_string(&path) {
                                 clipboard_copy_text(&text);
-                                self.status_message = Some("Attachment text copied".into());
+                                self.set_status("Attachment text copied");
                             } else {
-                                self.status_message = Some("Failed to read attachment".into());
+                                self.set_status("Failed to read attachment");
                             }
                         } else if is_image {
                             clipboard_copy_image(&path);
-                            self.status_message = Some("Image copied to clipboard".into());
+                            self.set_status("Image copied to clipboard");
                         } else {
                             clipboard_copy_text(&path.display().to_string());
-                            self.status_message = Some("Attachment path copied".into());
+                            self.set_status("Attachment path copied");
                         }
                     } else if !is_image {
-                        self.status_message = Some(format!(
+                        self.set_status(format!(
                             "Non-image attachments ({}) are not supported by kdeconnectd",
                             mime
                         ));
                     } else {
-                        self.status_message = Some("Attachment not downloaded yet".into());
+                        self.set_status("Attachment not downloaded yet");
                     }
                 } else if !is_image {
-                    self.status_message = Some(format!(
+                    self.set_status(format!(
                         "Non-image attachments ({}) are not supported by kdeconnectd",
                         mime
                     ));
                 } else {
-                    self.status_message = Some("Attachment not downloaded yet".into());
+                    self.set_status("Attachment not downloaded yet");
                 }
+            }
+        }
+    }
+
+    /// Download the selected image attachment to XDG_DOWNLOAD_DIR (or HOME).
+    fn download_selected_attachment(&mut self) {
+        if self.selected_message_part == 0 {
+            self.set_status("No attachment selected");
+            return;
+        }
+
+        let att_info = self
+            .selected_message_and_attachment()
+            .and_then(|(_, att)| att)
+            .map(|att| {
+                (
+                    att.cached_path.clone(),
+                    att.is_image(),
+                    att.mime_type.clone(),
+                    att.unique_identifier.clone(),
+                )
+            });
+
+        let Some((cached_path, is_image, mime_type, unique_id)) = att_info else {
+            return;
+        };
+
+        if !is_image {
+            self.set_status(format!(
+                "Non-image attachments ({}) are not supported by kdeconnectd",
+                mime_type
+            ));
+            return;
+        }
+
+        let Some(src) = cached_path.filter(|p| p.exists()) else {
+            self.set_status("Attachment not downloaded yet");
+            return;
+        };
+
+        let download_dir = std::env::var("XDG_DOWNLOAD_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+            });
+
+        // Build filename from unique_identifier, preserving original extension
+        // or inferring from mime type.
+        let mut filename = std::path::PathBuf::from(&unique_id);
+        if filename.extension().is_none() {
+            if let Some(ext) = mime_type.strip_prefix("image/") {
+                let ext = match ext {
+                    "jpeg" => "jpg",
+                    other => other,
+                };
+                filename.set_extension(ext);
+            }
+        }
+
+        let dest = download_dir.join(&filename);
+
+        match std::fs::copy(&src, &dest) {
+            Ok(_) => {
+                self.set_status(format!("Downloaded: {}", dest.display()));
+            }
+            Err(e) => {
+                self.set_status(format!("Download failed: {}", e));
             }
         }
     }

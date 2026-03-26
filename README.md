@@ -67,6 +67,7 @@ are saved per-conversation when you switch away.
 | `h` / `Tab` | Switch focus to conversations panel |
 | `i` | Focus compose input |
 | `Enter` | Open selected attachment (xdg-open) |
+| `D` | Download selected image to downloads folder |
 | `c` | Copy message text or attachment to clipboard |
 | `d` | Open device selector |
 | `g` | Edit group name |

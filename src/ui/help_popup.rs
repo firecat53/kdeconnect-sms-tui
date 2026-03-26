@@ -14,6 +14,7 @@ const HELP_ENTRIES: &[(&str, &str)] = &[
     ("h, Tab", "Move from messages to conversations"),
     ("Enter / i", "Compose from the selected conversation"),
     ("Enter (messages)", "Open selected attachment"),
+    ("D (messages)", "Download selected image to downloads folder"),
     ("c", "Copy message text or attachment"),
     ("Esc", "Cancel / back to previous panel"),
     ("", ""),
