@@ -8,11 +8,12 @@ use super::theme;
 
 /// Key binding entries: (key, description)
 const HELP_ENTRIES: &[(&str, &str)] = &[
-    ("j/k, Up/Down", "Navigate items / select message"),
-    ("J/K, PgDn/PgUp", "Page down / page up"),
-    ("h/l, Tab", "Switch panel (conversations / messages)"),
-    ("i", "Compose message"),
-    ("Enter", "Open selected attachment (xdg-open)"),
+    ("j/k, Up/Down", "Navigate conversations, messages, or popup lists"),
+    ("J/K, PgDn/PgUp", "Page through conversations or messages"),
+    ("l, Tab", "Move from conversations to messages"),
+    ("h, Tab", "Move from messages to conversations"),
+    ("Enter / i", "Compose from the selected conversation"),
+    ("Enter (messages)", "Open selected attachment"),
     ("c", "Copy message text or attachment"),
     ("Esc", "Cancel / back to previous panel"),
     ("", ""),
@@ -25,7 +26,9 @@ const HELP_ENTRIES: &[(&str, &str)] = &[
     ("A", "Browse archived conversations"),
     ("S", "Browse spam conversations"),
     ("", ""),
-    ("Shift+Enter", "Insert newline while composing"),
+    ("Shift+Enter / Alt+Enter", "Insert newline while composing"),
+    ("Alt+A / Alt+X", "Add or remove a compose attachment"),
+    ("Backspace (picker)", "Move to parent directory"),
     ("Ctrl+C", "Quit"),
     ("?", "Show this help"),
 ];
@@ -101,7 +104,7 @@ mod tests {
 
         let content = crate::ui::test_helpers::buffer_to_string(terminal.backend().buffer());
         assert!(content.contains("Help"));
-        assert!(content.contains("Navigate items"));
+        assert!(content.contains("Navigate conversations"));
         assert!(content.contains("Ctrl+C"));
         assert!(content.contains("Archive"));
     }
