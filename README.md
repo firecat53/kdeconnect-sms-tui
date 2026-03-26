@@ -171,6 +171,18 @@ Contact names are read from KDE Connect's synced vCards at `~/.local/share/kpeop
 - Archive and spam folders for hiding conversations
 - Auto-restore archived/spam threads on new incoming messages
 
+## Known limitations
+
+- **Offline device detection is slow.** When a phone disconnects
+  uncleanly (e.g. walks out of WiFi range, battery dies, or Android kills
+  the background process), `kdeconnectd` may not notice for 10–20 minutes.
+  This is a limitation of the KDE Connect daemon, which relies on TCP
+  keep-alive timeouts to detect dead connections. During this window the
+  device still appears "reachable," sent messages will be silently queued
+  (and likely lost), and `r` to refresh will appear to hang. The official
+  `kdeconnect-sms` GUI has the same behavior. A clean disconnect (e.g.
+  toggling KDE Connect off on the phone) is detected immediately.
+
 ## License
 
 MIT
