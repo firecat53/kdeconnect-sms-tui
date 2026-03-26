@@ -79,7 +79,7 @@ are saved per-conversation when you switch away.
 | Key | Action |
 |-----|--------|
 | `Enter` | Send message |
-| `Shift+Enter` / `Alt+Enter` | Newline |
+| `Shift+Enter` / `Alt+Enter` / `Ctrl+j` | Newline |
 | `Esc` | Back to previous panel |
 | `Left` / `Right` / `Home` / `End` | Cursor movement |
 | `Alt+A` | Attach an image |

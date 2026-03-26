@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -116,6 +119,10 @@ pub struct App {
     pub compose_input: String,
     /// Cursor position in compose_input (byte offset)
     pub compose_cursor: usize,
+    /// Scroll offset for compose text (number of lines to scroll from top)
+    pub compose_scroll: u16,
+    /// Width of the compose text area (set during rendering, used for Up/Down navigation)
+    pub compose_width: u16,
     /// Per-conversation draft messages: thread_id → (text, cursor_byte_offset)
     pub drafts: HashMap<i64, (String, usize)>,
     /// Whether the device popup is showing (tracked via Focus::DevicePopup)
@@ -215,6 +222,8 @@ impl App {
             pre_compose_focus: Focus::ConversationList,
             compose_input: String::new(),
             compose_cursor: 0,
+            compose_scroll: 0,
+            compose_width: 0,
             drafts: HashMap::new(),
             device_popup_idx: 0,
             daemon,
@@ -291,6 +300,8 @@ impl App {
             pre_compose_focus: Focus::ConversationList,
             compose_input: String::new(),
             compose_cursor: 0,
+            compose_scroll: 0,
+            compose_width: 0,
             drafts: HashMap::new(),
             device_popup_idx: 0,
             daemon: None,
@@ -635,6 +646,12 @@ impl App {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
+        // Enable enhanced keyboard protocol so Shift+Enter is distinguishable
+        // from plain Enter. Silently ignored by terminals that don't support it.
+        let _ = execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
+        );
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -653,6 +670,7 @@ impl App {
         let result = self.run_inner(&mut terminal).await;
 
         // Always restore terminal, even on error
+        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()?;
@@ -1670,6 +1688,12 @@ impl App {
                 }
             }
 
+            // Ctrl+J: newline (readline binding)
+            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.compose_input.insert(self.compose_cursor, '\n');
+                self.compose_cursor += 1;
+            }
+
             // Backspace
             KeyCode::Backspace => {
                 if self.compose_cursor > 0 {
@@ -1712,6 +1736,70 @@ impl App {
                         .nth(1)
                         .map(|(i, _)| self.compose_cursor + i)
                         .unwrap_or(self.compose_input.len());
+                }
+            }
+            KeyCode::Up => {
+                if self.compose_width > 0 {
+                    let width = self.compose_width as usize;
+                    let lines =
+                        crate::ui::compose::wrap_lines(&self.compose_input, width);
+                    let (cx, cy) = crate::ui::compose::cursor_position(
+                        &self.compose_input,
+                        self.compose_cursor,
+                        width,
+                    );
+                    if cy > 0 {
+                        // Move to same column on previous visual line
+                        let (prev_start, prev_end) = lines[cy - 1];
+                        let prev_line = &self.compose_input[prev_start..prev_end];
+                        let mut target = prev_start;
+                        let mut col = 0usize;
+                        for (i, ch) in prev_line.char_indices() {
+                            let cw =
+                                unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                            if col + cw > cx {
+                                target = prev_start + i;
+                                break;
+                            }
+                            col += cw;
+                            target = prev_start + i + ch.len_utf8();
+                        }
+                        // Clamp to end of previous line
+                        target = target.min(prev_end);
+                        self.compose_cursor = target;
+                    }
+                }
+            }
+            KeyCode::Down => {
+                if self.compose_width > 0 {
+                    let width = self.compose_width as usize;
+                    let lines =
+                        crate::ui::compose::wrap_lines(&self.compose_input, width);
+                    let (cx, cy) = crate::ui::compose::cursor_position(
+                        &self.compose_input,
+                        self.compose_cursor,
+                        width,
+                    );
+                    if cy + 1 < lines.len() {
+                        // Move to same column on next visual line
+                        let (next_start, next_end) = lines[cy + 1];
+                        let next_line = &self.compose_input[next_start..next_end];
+                        let mut target = next_start;
+                        let mut col = 0usize;
+                        for (i, ch) in next_line.char_indices() {
+                            let cw =
+                                unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                            if col + cw > cx {
+                                target = next_start + i;
+                                break;
+                            }
+                            col += cw;
+                            target = next_start + i + ch.len_utf8();
+                        }
+                        // Clamp to end of next line
+                        target = target.min(next_end);
+                        self.compose_cursor = target;
+                    }
                 }
             }
             KeyCode::Home => {
@@ -1798,6 +1886,7 @@ impl App {
         self.focus = Focus::ConversationList;
         self.compose_input.clear();
         self.compose_cursor = 0;
+        self.compose_scroll = 0;
         self.drafts.clear();
     }
 
@@ -2286,6 +2375,7 @@ impl App {
                 } else {
                     self.compose_input.clear();
                     self.compose_cursor = 0;
+                    self.compose_scroll = 0;
                 }
             }
         }
@@ -2332,6 +2422,7 @@ impl App {
             Ok(()) => {
                 self.compose_input.clear();
                 self.compose_cursor = 0;
+                self.compose_scroll = 0;
                 self.pending_attachment = None;
                 self.drafts.remove(&thread_id);
                 self.status_message = Some("Message sent".into());
