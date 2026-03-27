@@ -172,6 +172,14 @@ pub struct App {
     pub file_picker_entries: Vec<PathBuf>,
     /// File picker: selected index in the entries list
     pub file_picker_idx: usize,
+    /// File picker: text in the path input box
+    pub file_picker_input: String,
+    /// File picker: cursor byte offset in input box
+    pub file_picker_input_cursor: usize,
+    /// File picker: whether the input box has focus (vs directory list)
+    pub file_picker_input_focused: bool,
+    /// File picker: whether to show hidden files/dirs
+    pub file_picker_show_hidden: bool,
     /// Request a full terminal repaint on the next draw cycle.
     /// Set when dismissing overlays (e.g. device popup) that may have
     /// erased protocol-based images (Kitty/Sixel).
@@ -248,6 +256,10 @@ impl App {
             file_picker_dir: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
             file_picker_entries: Vec::new(),
             file_picker_idx: 0,
+            file_picker_input: String::new(),
+            file_picker_input_cursor: 0,
+            file_picker_input_focused: false,
+            file_picker_show_hidden: false,
             needs_full_repaint: false,
             connected_at_ms: 0,
         };
@@ -327,6 +339,10 @@ impl App {
             file_picker_dir: PathBuf::from("/"),
             file_picker_entries: Vec::new(),
             file_picker_idx: 0,
+            file_picker_input: String::new(),
+            file_picker_input_cursor: 0,
+            file_picker_input_focused: false,
+            file_picker_show_hidden: false,
             needs_full_repaint: false,
             connected_at_ms: 0,
         }
@@ -2045,6 +2061,9 @@ impl App {
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.file_picker_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
                 crate::ui::file_picker_popup::refresh_file_picker_entries(self);
+                self.file_picker_input_focused = false;
+                self.file_picker_show_hidden = false;
+                crate::ui::file_picker_popup::sync_file_picker_input(self);
                 self.focus = Focus::FilePickerPopup;
             }
 
@@ -2534,6 +2553,14 @@ impl App {
     }
 
     fn handle_key_file_picker(&mut self, key: KeyEvent) {
+        if self.file_picker_input_focused {
+            self.handle_key_file_picker_input(key);
+        } else {
+            self.handle_key_file_picker_list(key);
+        }
+    }
+
+    fn handle_key_file_picker_list(&mut self, key: KeyEvent) {
         // Total entries = 1 ("../") + file_picker_entries.len()
         let total = 1 + self.file_picker_entries.len();
 
@@ -2542,12 +2569,16 @@ impl App {
                 self.focus = Focus::Compose;
                 self.needs_full_repaint = true;
             }
+            KeyCode::Tab => {
+                self.file_picker_input_focused = true;
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.file_picker_idx > 0 {
                     self.file_picker_idx -= 1;
                 } else {
                     self.file_picker_idx = total.saturating_sub(1);
                 }
+                crate::ui::file_picker_popup::sync_file_picker_input(self);
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.file_picker_idx + 1 < total {
@@ -2555,20 +2586,23 @@ impl App {
                 } else {
                     self.file_picker_idx = 0;
                 }
+                crate::ui::file_picker_popup::sync_file_picker_input(self);
             }
-            KeyCode::Backspace => {
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => {
                 // Navigate to parent directory
                 if let Some(parent) = self.file_picker_dir.parent() {
                     self.file_picker_dir = parent.to_path_buf();
                     crate::ui::file_picker_popup::refresh_file_picker_entries(self);
+                    crate::ui::file_picker_popup::sync_file_picker_input(self);
                 }
             }
-            KeyCode::Enter => {
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => {
                 if self.file_picker_idx == 0 {
                     // "../" — go to parent
                     if let Some(parent) = self.file_picker_dir.parent() {
                         self.file_picker_dir = parent.to_path_buf();
                         crate::ui::file_picker_popup::refresh_file_picker_entries(self);
+                        crate::ui::file_picker_popup::sync_file_picker_input(self);
                     }
                 } else {
                     let entry_idx = self.file_picker_idx - 1;
@@ -2576,6 +2610,7 @@ impl App {
                         if path.is_dir() {
                             self.file_picker_dir = path;
                             crate::ui::file_picker_popup::refresh_file_picker_entries(self);
+                            crate::ui::file_picker_popup::sync_file_picker_input(self);
                         } else {
                             // Selected an image file
                             let mime = crate::ui::file_picker_popup::mime_from_path(&path);
@@ -2585,6 +2620,214 @@ impl App {
                         }
                     }
                 }
+            }
+            KeyCode::Char('.') => {
+                self.file_picker_show_hidden = !self.file_picker_show_hidden;
+                crate::ui::file_picker_popup::refresh_file_picker_entries(self);
+                crate::ui::file_picker_popup::sync_file_picker_input(self);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_key_file_picker_input(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.focus = Focus::Compose;
+                self.needs_full_repaint = true;
+            }
+            KeyCode::Tab => {
+                self.file_picker_input_focused = false;
+            }
+            KeyCode::Enter => {
+                let path = crate::ui::file_picker_popup::expand_path(&self.file_picker_input);
+                if path.is_dir() {
+                    self.file_picker_dir = path;
+                    crate::ui::file_picker_popup::refresh_file_picker_entries(self);
+                    crate::ui::file_picker_popup::sync_file_picker_input(self);
+                    self.file_picker_input_focused = false;
+                } else if path.is_file() {
+                    let mime = crate::ui::file_picker_popup::mime_from_path(&path);
+                    self.pending_attachment = Some((path, mime));
+                    self.focus = Focus::Compose;
+                    self.needs_full_repaint = true;
+                }
+                // If path doesn't exist, do nothing (user can keep editing)
+            }
+            KeyCode::Backspace => {
+                if self.file_picker_input_cursor > 0 {
+                    let prev = self.file_picker_input[..self.file_picker_input_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.file_picker_input.drain(prev..self.file_picker_input_cursor);
+                    self.file_picker_input_cursor = prev;
+                }
+            }
+            KeyCode::Delete => {
+                if self.file_picker_input_cursor < self.file_picker_input.len() {
+                    let next = self.file_picker_input[self.file_picker_input_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.file_picker_input_cursor + i)
+                        .unwrap_or(self.file_picker_input.len());
+                    self.file_picker_input.drain(self.file_picker_input_cursor..next);
+                }
+            }
+            KeyCode::Left => {
+                if self.file_picker_input_cursor > 0 {
+                    self.file_picker_input_cursor = self.file_picker_input[..self.file_picker_input_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+            KeyCode::Right => {
+                if self.file_picker_input_cursor < self.file_picker_input.len() {
+                    self.file_picker_input_cursor = self.file_picker_input[self.file_picker_input_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.file_picker_input_cursor + i)
+                        .unwrap_or(self.file_picker_input.len());
+                }
+            }
+            KeyCode::Home => self.file_picker_input_cursor = 0,
+            KeyCode::End => self.file_picker_input_cursor = self.file_picker_input.len(),
+            // Readline: Ctrl+A — beginning of line
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.file_picker_input_cursor = 0;
+            }
+            // Readline: Ctrl+E — end of line
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.file_picker_input_cursor = self.file_picker_input.len();
+            }
+            // Readline: Ctrl+F — forward one char
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.file_picker_input_cursor < self.file_picker_input.len() {
+                    self.file_picker_input_cursor = self.file_picker_input[self.file_picker_input_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.file_picker_input_cursor + i)
+                        .unwrap_or(self.file_picker_input.len());
+                }
+            }
+            // Readline: Ctrl+B — backward one char
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.file_picker_input_cursor > 0 {
+                    self.file_picker_input_cursor = self.file_picker_input[..self.file_picker_input_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+            // Readline: Alt+F — forward one word
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &self.file_picker_input[self.file_picker_input_cursor..];
+                let mut pos = s.len();
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices() {
+                    if ch.is_whitespace() || ch == '/' {
+                        if in_word {
+                            past_space = true;
+                        }
+                    } else {
+                        if past_space {
+                            pos = i;
+                            break;
+                        }
+                        in_word = true;
+                    }
+                    pos = i + ch.len_utf8();
+                }
+                self.file_picker_input_cursor += pos;
+            }
+            // Readline: Alt+B — backward one word
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &self.file_picker_input[..self.file_picker_input_cursor];
+                let mut pos = 0;
+                let mut in_word = false;
+                for (i, ch) in s.char_indices().rev() {
+                    if ch.is_whitespace() || ch == '/' {
+                        if in_word {
+                            pos = i + ch.len_utf8();
+                            break;
+                        }
+                    } else {
+                        in_word = true;
+                    }
+                    pos = i;
+                }
+                self.file_picker_input_cursor = pos;
+            }
+            // Readline: Ctrl+D — delete char at cursor
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.file_picker_input_cursor < self.file_picker_input.len() {
+                    let next = self.file_picker_input[self.file_picker_input_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.file_picker_input_cursor + i)
+                        .unwrap_or(self.file_picker_input.len());
+                    self.file_picker_input.drain(self.file_picker_input_cursor..next);
+                }
+            }
+            // Readline: Ctrl+K — kill to end of line
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.file_picker_input.drain(self.file_picker_input_cursor..);
+            }
+            // Readline: Ctrl+U — kill to beginning of line
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.file_picker_input.drain(..self.file_picker_input_cursor);
+                self.file_picker_input_cursor = 0;
+            }
+            // Readline: Alt+D — kill word forward
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &self.file_picker_input[self.file_picker_input_cursor..];
+                let mut pos = s.len();
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices() {
+                    if ch.is_whitespace() || ch == '/' {
+                        if in_word {
+                            past_space = true;
+                        }
+                    } else {
+                        if past_space {
+                            pos = i;
+                            break;
+                        }
+                        in_word = true;
+                    }
+                    pos = i + ch.len_utf8();
+                }
+                self.file_picker_input
+                    .drain(self.file_picker_input_cursor..self.file_picker_input_cursor + pos);
+            }
+            // Readline: Ctrl+W — kill word backward
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let s = &self.file_picker_input[..self.file_picker_input_cursor];
+                let mut pos = 0;
+                let mut in_word = false;
+                for (i, ch) in s.char_indices().rev() {
+                    if ch.is_whitespace() || ch == '/' {
+                        if in_word {
+                            pos = i + ch.len_utf8();
+                            break;
+                        }
+                    } else {
+                        in_word = true;
+                    }
+                    pos = i;
+                }
+                self.file_picker_input.drain(pos..self.file_picker_input_cursor);
+                self.file_picker_input_cursor = pos;
+            }
+            KeyCode::Char(c) => {
+                self.file_picker_input.insert(self.file_picker_input_cursor, c);
+                self.file_picker_input_cursor += c.len_utf8();
             }
             _ => {}
         }
