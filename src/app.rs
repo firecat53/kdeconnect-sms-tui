@@ -1873,6 +1873,174 @@ impl App {
                 self.compose_cursor = self.compose_input.len();
             }
 
+            // Readline: Ctrl+A — beginning of line
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let line_start = self.compose_input[..self.compose_cursor]
+                    .rfind('\n')
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+                self.compose_cursor = line_start;
+            }
+
+            // Readline: Ctrl+E — end of line
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let line_end = self.compose_input[self.compose_cursor..]
+                    .find('\n')
+                    .map(|i| self.compose_cursor + i)
+                    .unwrap_or(self.compose_input.len());
+                self.compose_cursor = line_end;
+            }
+
+            // Readline: Ctrl+F — forward one char
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.compose_cursor < self.compose_input.len() {
+                    self.compose_cursor = self.compose_input[self.compose_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.compose_cursor + i)
+                        .unwrap_or(self.compose_input.len());
+                }
+            }
+
+            // Readline: Ctrl+B — backward one char
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.compose_cursor > 0 {
+                    self.compose_cursor = self.compose_input[..self.compose_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+
+            // Readline: Alt+F — forward one word
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &self.compose_input[self.compose_cursor..];
+                // Skip non-whitespace, then whitespace (move to end of current/next word)
+                let mut it = s.char_indices();
+                // Skip current word chars
+                let mut pos = s.len();
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in &mut it {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            past_space = true;
+                        }
+                    } else {
+                        if past_space {
+                            pos = i;
+                            break;
+                        }
+                        in_word = true;
+                    }
+                    pos = i + ch.len_utf8();
+                }
+                self.compose_cursor += pos;
+            }
+
+            // Readline: Alt+B — backward one word
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &self.compose_input[..self.compose_cursor];
+                let mut pos = 0;
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices().rev() {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            pos = i + ch.len_utf8();
+                            break;
+                        }
+                        past_space = true;
+                    } else {
+                        if past_space || !in_word {
+                            in_word = true;
+                        }
+                    }
+                    pos = i;
+                }
+                self.compose_cursor = pos;
+            }
+
+            // Readline: Ctrl+D — delete char at cursor
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.compose_cursor < self.compose_input.len() {
+                    let next = self.compose_input[self.compose_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.compose_cursor + i)
+                        .unwrap_or(self.compose_input.len());
+                    self.compose_input.drain(self.compose_cursor..next);
+                }
+            }
+
+            // Readline: Ctrl+K — kill to end of line
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let line_end = self.compose_input[self.compose_cursor..]
+                    .find('\n')
+                    .map(|i| self.compose_cursor + i)
+                    .unwrap_or(self.compose_input.len());
+                self.compose_input.drain(self.compose_cursor..line_end);
+            }
+
+            // Readline: Ctrl+U — kill to beginning of line
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let line_start = self.compose_input[..self.compose_cursor]
+                    .rfind('\n')
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+                self.compose_input.drain(line_start..self.compose_cursor);
+                self.compose_cursor = line_start;
+            }
+
+            // Readline: Alt+D — kill word forward
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &self.compose_input[self.compose_cursor..];
+                let mut pos = s.len();
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices() {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            past_space = true;
+                        }
+                    } else {
+                        if past_space {
+                            pos = i;
+                            break;
+                        }
+                        in_word = true;
+                    }
+                    pos = i + ch.len_utf8();
+                }
+                self.compose_input
+                    .drain(self.compose_cursor..self.compose_cursor + pos);
+            }
+
+            // Readline: Ctrl+W — kill word backward
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let s = &self.compose_input[..self.compose_cursor];
+                let mut pos = 0;
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices().rev() {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            pos = i + ch.len_utf8();
+                            break;
+                        }
+                        past_space = true;
+                    } else {
+                        if past_space || !in_word {
+                            in_word = true;
+                        }
+                    }
+                    pos = i;
+                }
+                self.compose_input.drain(pos..self.compose_cursor);
+                self.compose_cursor = pos;
+            }
+
             // Attach image (Alt+A)
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.file_picker_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
@@ -2039,6 +2207,145 @@ impl App {
             }
             KeyCode::Home => self.group_name_cursor = 0,
             KeyCode::End => self.group_name_cursor = self.group_name_input.len(),
+
+            // Readline: Ctrl+A — beginning of line
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.group_name_cursor = 0;
+            }
+            // Readline: Ctrl+E — end of line
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.group_name_cursor = self.group_name_input.len();
+            }
+            // Readline: Ctrl+F — forward one char
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.group_name_cursor < self.group_name_input.len() {
+                    self.group_name_cursor = self.group_name_input[self.group_name_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.group_name_cursor + i)
+                        .unwrap_or(self.group_name_input.len());
+                }
+            }
+            // Readline: Ctrl+B — backward one char
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.group_name_cursor > 0 {
+                    self.group_name_cursor = self.group_name_input[..self.group_name_cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+            // Readline: Alt+F — forward one word
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &self.group_name_input[self.group_name_cursor..];
+                let mut pos = s.len();
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices() {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            past_space = true;
+                        }
+                    } else {
+                        if past_space {
+                            pos = i;
+                            break;
+                        }
+                        in_word = true;
+                    }
+                    pos = i + ch.len_utf8();
+                }
+                self.group_name_cursor += pos;
+            }
+            // Readline: Alt+B — backward one word
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &self.group_name_input[..self.group_name_cursor];
+                let mut pos = 0;
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices().rev() {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            pos = i + ch.len_utf8();
+                            break;
+                        }
+                        past_space = true;
+                    } else {
+                        if past_space || !in_word {
+                            in_word = true;
+                        }
+                    }
+                    pos = i;
+                }
+                self.group_name_cursor = pos;
+            }
+            // Readline: Ctrl+D — delete char at cursor
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.group_name_cursor < self.group_name_input.len() {
+                    let next = self.group_name_input[self.group_name_cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.group_name_cursor + i)
+                        .unwrap_or(self.group_name_input.len());
+                    self.group_name_input.drain(self.group_name_cursor..next);
+                }
+            }
+            // Readline: Ctrl+K — kill to end of line
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.group_name_input.drain(self.group_name_cursor..);
+            }
+            // Readline: Ctrl+U — kill to beginning of line
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.group_name_input.drain(..self.group_name_cursor);
+                self.group_name_cursor = 0;
+            }
+            // Readline: Alt+D — kill word forward
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &self.group_name_input[self.group_name_cursor..];
+                let mut pos = s.len();
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices() {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            past_space = true;
+                        }
+                    } else {
+                        if past_space {
+                            pos = i;
+                            break;
+                        }
+                        in_word = true;
+                    }
+                    pos = i + ch.len_utf8();
+                }
+                self.group_name_input
+                    .drain(self.group_name_cursor..self.group_name_cursor + pos);
+            }
+            // Readline: Ctrl+W — kill word backward
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let s = &self.group_name_input[..self.group_name_cursor];
+                let mut pos = 0;
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices().rev() {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            pos = i + ch.len_utf8();
+                            break;
+                        }
+                        past_space = true;
+                    } else {
+                        if past_space || !in_word {
+                            in_word = true;
+                        }
+                    }
+                    pos = i;
+                }
+                self.group_name_input.drain(pos..self.group_name_cursor);
+                self.group_name_cursor = pos;
+            }
             KeyCode::Char(c) => {
                 self.group_name_input.insert(self.group_name_cursor, c);
                 self.group_name_cursor += c.len_utf8();

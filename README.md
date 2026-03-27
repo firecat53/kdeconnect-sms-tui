@@ -85,6 +85,7 @@ are saved per-conversation when you switch away.
 | `Shift+Enter` / `Alt+Enter` / `Ctrl+j` | Newline                       |
 | `Esc`                                  | Back to previous panel        |
 | `Left` / `Right` / `Home` / `End`      | Cursor movement               |
+| Readline shortcuts                     | `C-a` `C-e` `C-f` `C-b` `M-f` `M-b` `C-d` `C-k` `C-u` `M-d` `C-w` |
 | `Alt+A`                                | Attach an image               |
 | `Alt+X`                                | Remove the pending attachment |
 
