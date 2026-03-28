@@ -6,7 +6,7 @@ use ratatui::Frame;
 use ratatui_image::StatefulImage;
 use unicode_width::UnicodeWidthChar;
 
-use super::{sanitize_for_terminal, theme};
+use super::{highlight_matches, sanitize_for_terminal, split_at_cursor, theme};
 use crate::app::{App, Focus, ImageState};
 
 /// Maximum height (in terminal rows) for an inline image.
@@ -103,7 +103,10 @@ fn wrapped_line_height(line: &Line<'_>, width: usize) -> u16 {
 }
 
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
-    let is_active = app.focus == Focus::MessageView;
+    let msg_search_active = app.focus == Focus::MessageSearch
+        || !app.msg_search_input.is_empty();
+    let is_active = app.focus == Focus::MessageView
+        || app.focus == Focus::MessageSearch;
     let border_style = if is_active {
         theme::active_border()
     } else {
@@ -200,11 +203,32 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
         let time = msg.timestamp_display();
         let body = sanitize_for_terminal(&msg.body);
-        let text_lines = vec![Line::from(vec![
+
+        let mut line_spans = vec![
             Span::styled(format!("[{}] ", time), theme::timestamp_style()),
             Span::styled(format!("{}: ", sender), style),
-            Span::raw(body),
-        ])];
+        ];
+
+        // Highlight search matches in message body
+        if !app.msg_search_input.is_empty() && app.msg_search_matches.contains(&msg_idx) {
+            let is_selected = app.selected_message_idx == Some(msg_idx)
+                && app.selected_message_part == 0;
+            let hl = if is_selected {
+                theme::search_highlight_selected()
+            } else {
+                theme::search_highlight()
+            };
+            line_spans.extend(highlight_matches(
+                &body,
+                &app.msg_search_input,
+                ratatui::style::Style::default(),
+                hl,
+            ));
+        } else {
+            line_spans.push(Span::raw(body));
+        }
+
+        let text_lines = vec![Line::from(line_spans)];
 
         items.push(RenderItem::Text {
             lines: text_lines,
@@ -262,8 +286,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Render the block border first, then render content inside
-    let inner = block.inner(area);
+    let full_inner = block.inner(area);
     f.render_widget(block, area);
+
+    // Split inner area for search box at bottom when search is active
+    let (inner, search_area) = if msg_search_active {
+        use ratatui::layout::{Constraint, Direction, Layout};
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(full_inner);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (full_inner, None)
+    };
 
     let inner_width = inner.width;
     let inner_height = inner.height;
@@ -511,6 +547,35 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         }
 
         y += item_height as i32;
+    }
+
+    // Render search box at bottom
+    if let Some(sa) = search_area {
+        let input = &app.msg_search_input;
+        let cursor = app.msg_search_cursor;
+        let (before, cursor_char, after) = split_at_cursor(input, cursor);
+        let match_info = if app.msg_search_matches.is_empty() && !input.is_empty() {
+            Span::styled(" [no match]", theme::help_style())
+        } else if let Some(idx) = app.msg_search_match_idx {
+            Span::styled(
+                format!(" [{}/{}]", idx + 1, app.msg_search_matches.len()),
+                theme::help_style(),
+            )
+        } else {
+            Span::raw("")
+        };
+        let search_line = Line::from(vec![
+            Span::styled("/", theme::title_style()),
+            Span::raw(before),
+            Span::styled(
+                cursor_char,
+                ratatui::style::Style::default()
+                    .add_modifier(ratatui::style::Modifier::REVERSED),
+            ),
+            Span::raw(after),
+            match_info,
+        ]);
+        f.render_widget(Paragraph::new(search_line), sa);
     }
 }
 

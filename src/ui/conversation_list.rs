@@ -1,11 +1,11 @@
-use ratatui::layout::Rect;
-use ratatui::style::Modifier;
+use ratatui::layout::{Layout, Direction, Constraint, Rect};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
-use super::{sanitize_for_terminal, theme};
+use super::{highlight_matches, sanitize_for_terminal, split_at_cursor, theme};
 use crate::app::{App, Focus, LoadingState};
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
@@ -14,7 +14,10 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         _ => " Conversations ",
     };
 
-    let is_active = app.focus == Focus::ConversationList;
+    let search_active = app.focus == Focus::ConversationSearch
+        || !app.conv_search_input.is_empty();
+    let is_active = app.focus == Focus::ConversationList
+        || app.focus == Focus::ConversationSearch;
     let border_style = if is_active {
         theme::active_border()
     } else {
@@ -61,7 +64,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
     let items: Vec<ListItem> = visible
         .iter()
-        .map(|(_, conv)| {
+        .map(|(orig_idx, conv)| {
             let name: String = if let Some(n) = conv.display_name.as_deref() {
                 n.to_string()
             } else if let Some(n) = app.state.group_names.get(&conv.thread_id.to_string()) {
@@ -115,21 +118,76 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             let name_budget = max_width.saturating_sub(time_width + marker_width + 1);
             let name_truncated = truncate_to_width(&name_sanitized, name_budget);
 
+            // Build name spans with search highlighting
+            let is_selected = app.selected_conversation_idx == Some(*orig_idx);
+            let name_spans = if !app.conv_search_input.is_empty()
+                && app.conv_search_matches.contains(orig_idx)
+            {
+                let hl = if is_selected {
+                    theme::search_highlight_selected()
+                } else {
+                    theme::search_highlight()
+                };
+                highlight_matches(&name_truncated, &app.conv_search_input, name_style, hl)
+            } else {
+                vec![Span::styled(name_truncated, name_style)]
+            };
+
+            let mut top_line_spans = name_spans;
+            top_line_spans.push(Span::styled(
+                unread_marker.to_string(),
+                theme::status_available(),
+            ));
+            top_line_spans.push(Span::raw(" "));
+            top_line_spans.push(Span::styled(time_str, theme::timestamp_style()));
+
             ListItem::new(vec![
-                Line::from(vec![
-                    Span::styled(name_truncated, name_style),
-                    Span::styled(unread_marker.to_string(), theme::status_available()),
-                    Span::raw(" "),
-                    Span::styled(time_str, theme::timestamp_style()),
-                ]),
+                Line::from(top_line_spans),
                 Line::from(Span::styled(preview_truncated, theme::help_style())),
             ])
         })
         .collect();
 
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(theme::selected_style());
+    // Render block border, then split inner area for search box + list
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let (search_area, list_area) = if search_active {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .split(inner);
+        (Some(chunks[0]), chunks[1])
+    } else {
+        (None, inner)
+    };
+
+    // Render search box
+    if let Some(sa) = search_area {
+        let input = &app.conv_search_input;
+        let cursor = app.conv_search_cursor;
+        let (before, cursor_char, after) = split_at_cursor(input, cursor);
+        let match_info = if app.conv_search_matches.is_empty() && !input.is_empty() {
+            Span::styled(" [no match]", theme::help_style())
+        } else if let Some(idx) = app.conv_search_match_idx {
+            Span::styled(
+                format!(" [{}/{}]", idx + 1, app.conv_search_matches.len()),
+                theme::help_style(),
+            )
+        } else {
+            Span::raw("")
+        };
+        let search_line = Line::from(vec![
+            Span::styled("/", theme::title_style()),
+            Span::raw(before),
+            Span::styled(cursor_char, Style::default().add_modifier(Modifier::REVERSED)),
+            Span::raw(after),
+            match_info,
+        ]);
+        f.render_widget(Paragraph::new(search_line), sa);
+    }
+
+    let list = List::new(items).highlight_style(theme::selected_style());
 
     let mut state = ListState::default();
     // Map the original selected index to the filtered list position.
@@ -137,7 +195,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .selected_conversation_idx
         .and_then(|sel| visible.iter().position(|(orig_idx, _)| *orig_idx == sel));
     state.select(filtered_idx);
-    f.render_stateful_widget(list, area, &mut state);
+    f.render_stateful_widget(list, list_area, &mut state);
 }
 
 /// Terminal-safe character width.  `unicode-width` follows UAX #11 which

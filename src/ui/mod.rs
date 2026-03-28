@@ -12,6 +12,8 @@ pub mod theme;
 #[cfg(test)]
 pub mod test_helpers;
 
+use ratatui::style::Style;
+use ratatui::text::Span;
 use ratatui::Frame;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -47,6 +49,55 @@ pub(crate) fn sanitize_for_terminal(s: &str) -> String {
         }
     }
     result
+}
+
+/// Split input at cursor into (before, cursor_char, after) for rendering.
+pub(crate) fn split_at_cursor(input: &str, cursor: usize) -> (String, String, String) {
+    let before = input[..cursor].to_string();
+    if cursor < input.len() {
+        let ch = input[cursor..].chars().next().unwrap();
+        let after_start = cursor + ch.len_utf8();
+        (before, ch.to_string(), input[after_start..].to_string())
+    } else {
+        (before, " ".to_string(), String::new())
+    }
+}
+
+/// Split text into spans, highlighting case-insensitive matches of `needle`.
+/// `highlight_style` determines the style used for matched substrings.
+pub(crate) fn highlight_matches<'a>(
+    text: &str,
+    needle: &str,
+    base_style: Style,
+    highlight_style: Style,
+) -> Vec<Span<'a>> {
+    let mut spans = Vec::new();
+    let text_lower = text.to_lowercase();
+    let needle_lower = needle.to_lowercase();
+    let mut start = 0;
+
+    while let Some(pos) = text_lower[start..].find(&needle_lower) {
+        let match_start = start + pos;
+        let match_end = match_start + needle.len();
+        if match_start > start {
+            spans.push(Span::styled(
+                text[start..match_start].to_string(),
+                base_style,
+            ));
+        }
+        spans.push(Span::styled(
+            text[match_start..match_end].to_string(),
+            highlight_style,
+        ));
+        start = match_end;
+    }
+    if start < text.len() {
+        spans.push(Span::styled(text[start..].to_string(), base_style));
+    }
+    if spans.is_empty() {
+        spans.push(Span::styled(text.to_string(), base_style));
+    }
+    spans
 }
 
 /// Render the full application UI.

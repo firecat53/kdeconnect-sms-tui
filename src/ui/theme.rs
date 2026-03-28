@@ -41,3 +41,14 @@ pub fn active_border() -> Style {
 pub fn inactive_border() -> Style {
     Style::default().fg(Color::DarkGray)
 }
+
+pub fn search_highlight() -> Style {
+    Style::default().fg(Color::Black).bg(Color::Yellow)
+}
+
+pub fn search_highlight_selected() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .bg(Color::DarkGray)
+        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+}

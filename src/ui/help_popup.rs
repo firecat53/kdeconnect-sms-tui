@@ -30,6 +30,10 @@ const HELP_ENTRIES: &[(&str, &str)] = &[
     ("Shift+Enter / Alt+Enter / Ctrl+j", "Insert newline while composing"),
     ("Alt+A / Alt+X", "Add or remove a compose attachment"),
     ("Backspace (picker)", "Move to parent directory"),
+    ("/", "Search conversations or messages"),
+    ("n/p", "Next/previous search result"),
+    ("Esc (search)", "Clear search"),
+    ("", ""),
     ("Ctrl+C", "Quit"),
     ("?", "Show this help"),
 ];

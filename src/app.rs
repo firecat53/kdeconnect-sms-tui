@@ -69,6 +69,8 @@ pub enum Focus {
     FolderPopup,
     FilePickerPopup,
     HelpPopup,
+    ConversationSearch,
+    MessageSearch,
 }
 
 /// Which folder popup is currently open.
@@ -180,6 +182,22 @@ pub struct App {
     pub file_picker_input_focused: bool,
     /// File picker: whether to show hidden files/dirs
     pub file_picker_show_hidden: bool,
+    /// Conversation search: input text
+    pub conv_search_input: String,
+    /// Conversation search: cursor byte offset
+    pub conv_search_cursor: usize,
+    /// Conversation search: matching visible conversation indices
+    pub conv_search_matches: Vec<usize>,
+    /// Conversation search: current index into conv_search_matches
+    pub conv_search_match_idx: Option<usize>,
+    /// Message search: input text
+    pub msg_search_input: String,
+    /// Message search: cursor byte offset
+    pub msg_search_cursor: usize,
+    /// Message search: matching message indices (newest first)
+    pub msg_search_matches: Vec<usize>,
+    /// Message search: current index into msg_search_matches
+    pub msg_search_match_idx: Option<usize>,
     /// Request a full terminal repaint on the next draw cycle.
     /// Set when dismissing overlays (e.g. device popup) that may have
     /// erased protocol-based images (Kitty/Sixel).
@@ -260,6 +278,14 @@ impl App {
             file_picker_input_cursor: 0,
             file_picker_input_focused: false,
             file_picker_show_hidden: false,
+            conv_search_input: String::new(),
+            conv_search_cursor: 0,
+            conv_search_matches: Vec::new(),
+            conv_search_match_idx: None,
+            msg_search_input: String::new(),
+            msg_search_cursor: 0,
+            msg_search_matches: Vec::new(),
+            msg_search_match_idx: None,
             needs_full_repaint: false,
             connected_at_ms: 0,
         };
@@ -343,6 +369,14 @@ impl App {
             file_picker_input_cursor: 0,
             file_picker_input_focused: false,
             file_picker_show_hidden: false,
+            conv_search_input: String::new(),
+            conv_search_cursor: 0,
+            conv_search_matches: Vec::new(),
+            conv_search_match_idx: None,
+            msg_search_input: String::new(),
+            msg_search_cursor: 0,
+            msg_search_matches: Vec::new(),
+            msg_search_match_idx: None,
             needs_full_repaint: false,
             connected_at_ms: 0,
         }
@@ -511,6 +545,8 @@ impl App {
                     self.conversations.push(new_conv);
                 }
                 self.sort_conversations();
+                self.clear_conv_search();
+                self.clear_msg_search();
                 self.loading = LoadingState::Idle;
 
                 let count = self.conversations.len();
@@ -882,6 +918,11 @@ impl App {
             self.selected_conversation_idx =
                 self.conversations.iter().position(|c| c.thread_id == tid);
         }
+
+        // Refresh conversation search matches since indices may have changed.
+        if !self.conv_search_input.is_empty() {
+            self.update_conv_search_matches_no_jump();
+        }
     }
 
     /// Handle a new conversation appearing via D-Bus signal.
@@ -922,6 +963,10 @@ impl App {
                         if pos <= *sel {
                             *sel += 1;
                         }
+                    }
+                    // Refresh message search matches since indices shifted
+                    if !self.msg_search_input.is_empty() {
+                        self.rebuild_msg_search_matches();
                     }
                 }
             }
@@ -971,6 +1016,10 @@ impl App {
                         if pos <= *sel {
                             *sel += 1;
                         }
+                    }
+                    // Refresh message search matches since indices shifted
+                    if !self.msg_search_input.is_empty() {
+                        self.rebuild_msg_search_matches();
                     }
                 }
             }
@@ -1513,6 +1562,20 @@ impl App {
                 self.group_name_input.insert_str(self.group_name_cursor, line);
                 self.group_name_cursor += line.len();
             }
+            Focus::ConversationSearch => {
+                let line = text.lines().next().unwrap_or(&text);
+                self.conv_search_input
+                    .insert_str(self.conv_search_cursor, line);
+                self.conv_search_cursor += line.len();
+                self.update_conv_search_matches();
+            }
+            Focus::MessageSearch => {
+                let line = text.lines().next().unwrap_or(&text);
+                self.msg_search_input
+                    .insert_str(self.msg_search_cursor, line);
+                self.msg_search_cursor += line.len();
+                self.update_msg_search_matches();
+            }
             _ => {}
         }
     }
@@ -1536,6 +1599,8 @@ impl App {
             Focus::GroupInfoPopup => self.handle_key_group_info(key),
             Focus::FolderPopup => self.handle_key_folder_popup(key),
             Focus::FilePickerPopup => self.handle_key_file_picker(key),
+            Focus::ConversationSearch => self.handle_key_conv_search(key),
+            Focus::MessageSearch => self.handle_key_msg_search(key),
             Focus::HelpPopup => {
                 // Any key dismisses the help popup
                 self.focus = Focus::ConversationList;
@@ -1551,6 +1616,11 @@ impl App {
     ) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
+
+            // Esc clears active search
+            KeyCode::Esc => {
+                self.clear_conv_search();
+            }
 
             // Switch focus to messages panel
             KeyCode::Tab | KeyCode::Char('l') => {
@@ -1650,6 +1720,56 @@ impl App {
                 self.open_folder_popup(FolderKind::Spam);
             }
 
+            // Search conversations
+            KeyCode::Char('/') => {
+                self.conv_search_input.clear();
+                self.conv_search_cursor = 0;
+                self.conv_search_matches.clear();
+                self.conv_search_match_idx = None;
+                self.focus = Focus::ConversationSearch;
+            }
+
+            // Next search result (forward from current selection, wrapping)
+            KeyCode::Char('n') => {
+                if !self.conv_search_matches.is_empty() {
+                    let cur = self.selected_conversation_idx.unwrap_or(0);
+                    // Find first match after current selection, wrapping around
+                    let next = self
+                        .conv_search_matches
+                        .iter()
+                        .position(|&m| m > cur)
+                        .unwrap_or(0);
+                    self.conv_search_match_idx = Some(next);
+                    let conv_idx = self.conv_search_matches[next];
+                    self.save_draft();
+                    self.selected_conversation_idx = Some(conv_idx);
+                    self.message_scroll = 0;
+                    self.reset_message_selection();
+                    self.restore_draft();
+                    self.request_selected_conversation_messages();
+                }
+            }
+            // Previous search result (backward from current selection, wrapping)
+            KeyCode::Char('p') => {
+                if !self.conv_search_matches.is_empty() {
+                    let cur = self.selected_conversation_idx.unwrap_or(0);
+                    // Find last match before current selection, wrapping around
+                    let prev = self
+                        .conv_search_matches
+                        .iter()
+                        .rposition(|&m| m < cur)
+                        .unwrap_or(self.conv_search_matches.len() - 1);
+                    self.conv_search_match_idx = Some(prev);
+                    let conv_idx = self.conv_search_matches[prev];
+                    self.save_draft();
+                    self.selected_conversation_idx = Some(conv_idx);
+                    self.message_scroll = 0;
+                    self.reset_message_selection();
+                    self.restore_draft();
+                    self.request_selected_conversation_messages();
+                }
+            }
+
             _ => {}
         }
     }
@@ -1661,6 +1781,11 @@ impl App {
     ) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
+
+            // Esc clears active search
+            KeyCode::Esc => {
+                self.clear_msg_search();
+            }
 
             // Switch focus to conversations panel
             KeyCode::Tab | KeyCode::Char('h') => {
@@ -1742,6 +1867,51 @@ impl App {
             // Group info popup
             KeyCode::Char('g') => {
                 self.open_group_info_popup();
+            }
+
+            // Search messages
+            KeyCode::Char('/') => {
+                self.msg_search_input.clear();
+                self.msg_search_cursor = 0;
+                self.msg_search_matches.clear();
+                self.msg_search_match_idx = None;
+                self.focus = Focus::MessageSearch;
+            }
+
+            // Next search result (toward older messages from current selection)
+            KeyCode::Char('n') => {
+                if !self.msg_search_matches.is_empty() {
+                    let cur = self.selected_message_idx.unwrap_or(usize::MAX);
+                    // msg_search_matches is sorted newest-first (descending msg index).
+                    // "Next" = toward older = find first match with index < current.
+                    let next = self
+                        .msg_search_matches
+                        .iter()
+                        .position(|&m| m < cur)
+                        .unwrap_or(0); // wrap to newest match
+                    self.msg_search_match_idx = Some(next);
+                    let msg_idx = self.msg_search_matches[next];
+                    self.selected_message_idx = Some(msg_idx);
+                    self.selected_message_part = 0;
+                    self.maybe_load_more_on_scroll();
+                }
+            }
+            // Previous search result (toward newer messages from current selection)
+            KeyCode::Char('p') => {
+                if !self.msg_search_matches.is_empty() {
+                    let cur = self.selected_message_idx.unwrap_or(0);
+                    // "Previous" = toward newer = find last match with index > current.
+                    let prev = self
+                        .msg_search_matches
+                        .iter()
+                        .rposition(|&m| m > cur)
+                        .unwrap_or(self.msg_search_matches.len() - 1); // wrap to oldest match
+                    self.msg_search_match_idx = Some(prev);
+                    let msg_idx = self.msg_search_matches[prev];
+                    self.selected_message_idx = Some(msg_idx);
+                    self.selected_message_part = 0;
+                    self.maybe_load_more_on_scroll();
+                }
             }
 
             _ => {}
@@ -2158,6 +2328,368 @@ impl App {
         self.group_name_input = name;
         self.group_name_cursor = self.group_name_input.len();
         self.focus = Focus::GroupInfoPopup;
+    }
+
+    /// Handle a single-line readline key event on the given (input, cursor) pair.
+    /// Returns true if the key was handled.
+    fn handle_readline_single_line(
+        input: &mut String,
+        cursor: &mut usize,
+        key: &KeyEvent,
+    ) -> bool {
+        match key.code {
+            KeyCode::Backspace => {
+                if *cursor > 0 {
+                    let prev = input[..*cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    input.drain(prev..*cursor);
+                    *cursor = prev;
+                }
+            }
+            KeyCode::Delete => {
+                if *cursor < input.len() {
+                    let next = input[*cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| *cursor + i)
+                        .unwrap_or(input.len());
+                    input.drain(*cursor..next);
+                }
+            }
+            KeyCode::Left => {
+                if *cursor > 0 {
+                    *cursor = input[..*cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+            KeyCode::Right => {
+                if *cursor < input.len() {
+                    *cursor = input[*cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| *cursor + i)
+                        .unwrap_or(input.len());
+                }
+            }
+            KeyCode::Home => *cursor = 0,
+            KeyCode::End => *cursor = input.len(),
+            // Readline: Ctrl+A — beginning of line
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                *cursor = 0;
+            }
+            // Readline: Ctrl+E — end of line
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                *cursor = input.len();
+            }
+            // Readline: Ctrl+F — forward one char
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if *cursor < input.len() {
+                    *cursor = input[*cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| *cursor + i)
+                        .unwrap_or(input.len());
+                }
+            }
+            // Readline: Ctrl+B — backward one char
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if *cursor > 0 {
+                    *cursor = input[..*cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                }
+            }
+            // Readline: Alt+F — forward one word
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &input[*cursor..];
+                let mut pos = s.len();
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices() {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            past_space = true;
+                        }
+                    } else {
+                        if past_space {
+                            pos = i;
+                            break;
+                        }
+                        in_word = true;
+                    }
+                    pos = i + ch.len_utf8();
+                }
+                *cursor += pos;
+            }
+            // Readline: Alt+B — backward one word
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &input[..*cursor];
+                let mut pos = 0;
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices().rev() {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            pos = i + ch.len_utf8();
+                            break;
+                        }
+                        past_space = true;
+                    } else {
+                        if past_space || !in_word {
+                            in_word = true;
+                        }
+                    }
+                    pos = i;
+                }
+                *cursor = pos;
+            }
+            // Readline: Ctrl+D — delete char at cursor
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if *cursor < input.len() {
+                    let next = input[*cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| *cursor + i)
+                        .unwrap_or(input.len());
+                    input.drain(*cursor..next);
+                }
+            }
+            // Readline: Ctrl+K — kill to end of line
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                input.drain(*cursor..);
+            }
+            // Readline: Ctrl+U — kill to beginning of line
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                input.drain(..*cursor);
+                *cursor = 0;
+            }
+            // Readline: Alt+D — kill word forward
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let s = &input[*cursor..];
+                let mut pos = s.len();
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices() {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            past_space = true;
+                        }
+                    } else {
+                        if past_space {
+                            pos = i;
+                            break;
+                        }
+                        in_word = true;
+                    }
+                    pos = i + ch.len_utf8();
+                }
+                input.drain(*cursor..*cursor + pos);
+            }
+            // Readline: Ctrl+W — kill word backward
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let s = &input[..*cursor];
+                let mut pos = 0;
+                let mut in_word = false;
+                let mut past_space = false;
+                for (i, ch) in s.char_indices().rev() {
+                    if ch.is_whitespace() {
+                        if in_word {
+                            pos = i + ch.len_utf8();
+                            break;
+                        }
+                        past_space = true;
+                    } else {
+                        if past_space || !in_word {
+                            in_word = true;
+                        }
+                    }
+                    pos = i;
+                }
+                input.drain(pos..*cursor);
+                *cursor = pos;
+            }
+            KeyCode::Char(c) => {
+                input.insert(*cursor, c);
+                *cursor += c.len_utf8();
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn handle_key_conv_search(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.conv_search_input.clear();
+                self.conv_search_cursor = 0;
+                self.conv_search_matches.clear();
+                self.conv_search_match_idx = None;
+                self.focus = Focus::ConversationList;
+            }
+            KeyCode::Enter => {
+                // Confirm search — leave matches active for n/p navigation
+                self.focus = Focus::ConversationList;
+            }
+            _ => {
+                if Self::handle_readline_single_line(
+                    &mut self.conv_search_input,
+                    &mut self.conv_search_cursor,
+                    &key,
+                ) {
+                    self.update_conv_search_matches();
+                }
+            }
+        }
+    }
+
+    fn handle_key_msg_search(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.msg_search_input.clear();
+                self.msg_search_cursor = 0;
+                self.msg_search_matches.clear();
+                self.msg_search_match_idx = None;
+                self.focus = Focus::MessageView;
+            }
+            KeyCode::Enter => {
+                // Confirm search — leave matches active for n/p navigation
+                self.focus = Focus::MessageView;
+            }
+            _ => {
+                if Self::handle_readline_single_line(
+                    &mut self.msg_search_input,
+                    &mut self.msg_search_cursor,
+                    &key,
+                ) {
+                    self.update_msg_search_matches();
+                }
+            }
+        }
+    }
+
+    /// Rebuild conversation search matches from current search input.
+    /// Rebuild conversation search match list from current input.
+    fn rebuild_conv_search_matches(&mut self) {
+        self.conv_search_matches.clear();
+        self.conv_search_match_idx = None;
+
+        if self.conv_search_input.is_empty() {
+            return;
+        }
+
+        let needle = self.conv_search_input.to_lowercase();
+        let visible = self.visible_conversation_indices();
+
+        for &idx in &visible {
+            let conv = &self.conversations[idx];
+            let name = if let Some(n) = conv.display_name.as_deref() {
+                n.to_string()
+            } else if let Some(n) = self.state.group_names.get(&conv.thread_id.to_string()) {
+                n.clone()
+            } else if conv.is_group {
+                self.generate_group_initials(conv)
+            } else {
+                let addr = conv.primary_address().unwrap_or("Unknown");
+                self.contacts
+                    .lookup(addr)
+                    .unwrap_or_else(|| addr.to_string())
+            };
+
+            let name_lower = name.to_lowercase();
+            let addr_lower = conv
+                .primary_address()
+                .unwrap_or("")
+                .to_lowercase();
+
+            if name_lower.contains(&needle) || addr_lower.contains(&needle) {
+                self.conv_search_matches.push(idx);
+            }
+        }
+    }
+
+    /// Rebuild matches and jump to first result (used while typing in search box).
+    fn update_conv_search_matches(&mut self) {
+        self.rebuild_conv_search_matches();
+
+        if !self.conv_search_matches.is_empty() {
+            self.conv_search_match_idx = Some(0);
+            let conv_idx = self.conv_search_matches[0];
+            self.save_draft();
+            self.selected_conversation_idx = Some(conv_idx);
+            self.message_scroll = 0;
+            self.reset_message_selection();
+            self.restore_draft();
+            self.request_selected_conversation_messages();
+        }
+    }
+
+    /// Rebuild matches without moving the selection (used after sort/reload).
+    fn update_conv_search_matches_no_jump(&mut self) {
+        self.rebuild_conv_search_matches();
+    }
+
+    /// Rebuild message search matches from current search input.
+    /// Rebuild message search match list from current input.
+    fn rebuild_msg_search_matches(&mut self) {
+        self.msg_search_matches.clear();
+        self.msg_search_match_idx = None;
+
+        if self.msg_search_input.is_empty() {
+            return;
+        }
+
+        let needle = self.msg_search_input.to_lowercase();
+
+        let messages = self
+            .selected_conversation_idx
+            .and_then(|i| self.conversations.get(i))
+            .map(|c| &c.messages);
+
+        if let Some(messages) = messages {
+            // Collect matches from newest to oldest
+            for idx in (0..messages.len()).rev() {
+                if messages[idx].body.to_lowercase().contains(&needle) {
+                    self.msg_search_matches.push(idx);
+                }
+            }
+        }
+    }
+
+    /// Rebuild matches and jump to first result (used while typing in search box).
+    fn update_msg_search_matches(&mut self) {
+        self.rebuild_msg_search_matches();
+
+        if !self.msg_search_matches.is_empty() {
+            self.msg_search_match_idx = Some(0);
+            let msg_idx = self.msg_search_matches[0];
+            self.selected_message_idx = Some(msg_idx);
+            self.selected_message_part = 0;
+            self.maybe_load_more_on_scroll();
+        }
+    }
+
+    /// Clear all search state for conversation search.
+    fn clear_conv_search(&mut self) {
+        self.conv_search_input.clear();
+        self.conv_search_cursor = 0;
+        self.conv_search_matches.clear();
+        self.conv_search_match_idx = None;
+    }
+
+    /// Clear all search state for message search.
+    fn clear_msg_search(&mut self) {
+        self.msg_search_input.clear();
+        self.msg_search_cursor = 0;
+        self.msg_search_matches.clear();
+        self.msg_search_match_idx = None;
     }
 
     fn handle_key_group_info(&mut self, key: KeyEvent) {
@@ -3065,6 +3597,7 @@ impl App {
         self.selected_conversation_idx = Some(new_idx);
         self.message_scroll = 0;
         self.reset_message_selection();
+        self.clear_msg_search();
     }
 
     fn select_next_conversation(&mut self) {
@@ -3084,6 +3617,7 @@ impl App {
         self.selected_conversation_idx = Some(new_idx);
         self.message_scroll = 0;
         self.reset_message_selection();
+        self.clear_msg_search();
     }
 
     /// Get the currently selected message and its attachment (if part > 0).
