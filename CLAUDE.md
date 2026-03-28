@@ -29,13 +29,13 @@ A Nix flake is available (`nix develop`) with cargo-watch, cargo-nextest, and re
 
 ### Key modules
 
-- **`app.rs`** — Central `App` struct. Owns all state, runs the main event loop (`run_inner`), dispatches events by `Focus` enum. This is the largest file (~3300 lines).
+- **`app.rs`** — Central `App` struct. Owns all state, runs the main event loop (`run_inner`), dispatches events by `Focus` enum. This is the largest file (~4600 lines).
 - **`events.rs`** — `AppEvent` enum and event loop spawning (terminal + D-Bus signal listeners).
 - **`state.rs`** — Persistent state (group names, archived/spam lists) saved to `~/.local/state/kdeconnect-sms-tui/state.toml`.
 - **`contacts.rs`** — vCard parsing from `~/.local/share/kpeoplevcard/`, phone number normalization with suffix matching fallback.
 - **`dbus/`** — D-Bus clients: `DaemonClient` (device discovery), `ConversationsClient` (SMS/MMS API), signal listeners.
 - **`models/`** — Data structs: `Message`, `Conversation`, `Device`, `Attachment`. Messages parsed from D-Bus variant types.
-- **`ui/`** — Rendering layer. `draw()` in `mod.rs` orchestrates layout. Each panel is a separate module (conversation_list, message_view, compose, popups). `theme.rs` for colors/styles.
+- **`ui/`** — Rendering layer. `draw()` in `mod.rs` orchestrates layout. Each panel is a separate module (conversation_list, message_view, compose, popups, file_picker_popup). `theme.rs` for colors/styles.
 
 ### Key patterns
 

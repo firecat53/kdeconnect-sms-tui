@@ -11,6 +11,10 @@ cargo install --path .
 kdeconnect-sms-tui
 ```
 
+OR
+
+`nix run github:firecat53/kdeconnect-sms-tui`
+
 Requires a paired Android device running the KDE Connect app, and `kdeconnectd` running on your machine.
 
 ### Optional dependencies
@@ -40,79 +44,66 @@ Options:
 The active panel is highlighted with a distinct border color. Draft messages
 are saved per-conversation when you switch away.
 
-**Conversations panel**:
+**Conversations/Messages**:
 
-| Key                   | Action                                            |
-|-----------------------|---------------------------------------------------|
-| `j` / `Down`          | Next conversation                                 |
-| `k` / `Up`            | Previous item                                     |
-| `J` / `K`             | Page down / page up                               |
-| `PageDown` / `PageUp` | Page down / page up                               |
-| `l` / `Tab`           | Switch focus to messages panel                    |
-| `Enter` / `i`         | Focus compose input for the selected conversation |
-| `d`                   | Open device selector                              |
-| `g`                   | Edit group name (conversations panel)             |
-| `a` / `s`             | Archive / spam selected conversation              |
-| `A` / `S`             | View archived / spam folder                       |
-| `r`                   | Refresh conversations / reconnect                 |
-| `?`                   | Show help popup                                   |
-| `q`                   | Quit                                              |
+| Key                            | Action                                  |
+|--------------------------------|-----------------------------------------|
+| `j`/`k` or `Up`/`Down`         | Next/Previous                           |
+| `J`/`K` or `PageDown`/`PageUp` | Page down / page up                     |
+| `h`/`l` or `Tab`               | Switch focus to messages panel          |
+| `i`                            | Compose message (existing conversation) |
+| `d`                            | Open device selector                    |
+| `g`                            | Edit group name                         |
+| `a` / `s`                      | Archive / spam selected conversation    |
+| `A` / `S`                      | View archived / spam folder             |
+| `r`                            | Refresh conversations / reconnect       |
+| `/`                            | Search conversations by name or number  |
+| `n` / `p`                      | Next / previous search match            |
+| `Esc`                          | Clear search                            |
+| `?`                            | Show help popup                         |
+| `q`                            | Quit                                    |
 
-**Messages panel**:
+**Messages panel only**:
 
-| Key                   | Action                                       |
-|-----------------------|----------------------------------------------|
-| `j` / `Down`          | Next message or attachment                   |
-| `k` / `Up`            | Previous message or attachment               |
-| `J` / `K`             | Page down / page up                          |
-| `PageDown` / `PageUp` | Page down / page up                          |
-| `h` / `Tab`           | Switch focus to conversations panel          |
-| `i`                   | Focus compose input                          |
-| `Enter`               | Open selected attachment (xdg-open)          |
-| `D`                   | Download selected image to downloads folder  |
-| `c`                   | Copy message text or attachment to clipboard |
-| `d`                   | Open device selector                         |
-| `g`                   | Edit group name                              |
-| `r`                   | Refresh conversations / reconnect            |
-| `?`                   | Show help popup                              |
-| `q`                   | Quit                                         |
+| Key                         | Action                                      |
+|-----------------------------|---------------------------------------------|
+| `Enter`                     | Open selected attachment (xdg-open)         |
+| `D`                         | Download selected image to downloads folder |
+| `c`                         | Copy message text or image to clipboard     |
 
 **Compose**:
 
-| Key                                    | Action                        |
-|----------------------------------------|-------------------------------|
-| `Enter`                                | Send message                  |
-| `Shift+Enter` / `Alt+Enter` / `Ctrl+j` | Newline                       |
-| `Esc`                                  | Back to previous panel        |
-| `Left` / `Right` / `Home` / `End`      | Cursor movement               |
+| Key                                    | Action                                                            |
+|----------------------------------------|-------------------------------------------------------------------|
+| `Enter`                                | Send message                                                      |
+| `Shift+Enter` / `Alt+Enter` / `Ctrl+j` | Newline                                                           |
+| `Esc`                                  | Exit compose (draft saved)                                        |
 | Readline shortcuts                     | `C-a` `C-e` `C-f` `C-b` `M-f` `M-b` `C-d` `C-k` `C-u` `M-d` `C-w` |
-| `Alt+A`                                | Attach an image               |
-| `Alt+X`                                | Remove the pending attachment |
+| `Alt+a`                                | Attach an image                                                   |
+| `Alt+x`                                | Remove attachment                                                 |
 
 **Device selector** (after pressing d):
 
-| Key               | Action          |
-|-------------------|-----------------|
-| `j` / `Down`      | Next device     |
-| `k` / `Up`        | Previous device |
-| `Enter`           | Select device   |
-| `Esc` / `d` / `q` | Close           |
+| Key                    | Action               |
+|------------------------|----------------------|
+| `j`/`k` or `Up`/`Down` | Next/Previous device |
+| `Enter`                | Select device        |
+| `Esc` / `d` / `q`      | Close                |
 
-**File picker** (after `Alt+A` in compose):
+**File picker** (image attachment):
 
-| Key          | Action                         |
-|--------------|--------------------------------|
-| `j` / `Down` | Next entry                     |
-| `k` / `Up`   | Previous entry                 |
-| `Enter`      | Open directory or select image |
-| `Backspace`  | Go to parent directory         |
-| `Esc` / `q`  | Cancel                         |
+| Key                            | Action                          |
+|--------------------------------|---------------------------------|
+| `j`/`k` or `Up`/`Down`         | Next/Previous entry             |
+| `h`/`l` or `Enter`/`Backspace` | Enter or go to parent directory |
+| `Enter`                        | Enter directory or select image |
+| `Esc` / `q`                    | Cancel                          |
 
 Message scrolling moves message-by-message, keeping the bottom of the
 current message aligned to the viewport bottom. Messages taller than the
 viewport scroll line-by-line within the message.
 
-`Ctrl+C` quits from any screen.
+`Ctrl+c` quits from any screen.
 
 ## Installation
 
@@ -159,12 +150,14 @@ This file is managed automatically by the app.
 
 ## Contacts
 
-Contact names are read from KDE Connect's synced vCards at `~/.local/share/kpeoplevcard/`. Enable the Contacts plugin in the KDE Connect app to sync them.
+Contact names are read from KDE Connect's synced vCards at
+`~/.local/share/kpeoplevcard/`. Enable the Contacts plugin in the KDE Connect
+app to sync them.
 
 ## Features
 
 - Browse conversations
-- Search conversations (placeholder; not implemented yet)
+- Search conversations and messages
 - Send/receive SMS and MMS
 - Inline image display (Kitty, Sixel, iTerm2, halfblocks)
 - Contact name resolution from synced vCards
