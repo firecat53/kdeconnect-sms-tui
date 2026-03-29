@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }} (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            features: default
+            suffix: ""
+          - target: x86_64-unknown-linux-gnu
+            features: no-default-features
+            suffix: "-no-heif"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies (heif)
+        if: matrix.features == 'default'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libheif-dev libdbus-1-dev pkg-config
+
+      - name: Install system dependencies (no heif)
+        if: matrix.features == 'no-default-features'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.features }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Build (with heif)
+        if: matrix.features == 'default'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (without heif)
+        if: matrix.features == 'no-default-features'
+        run: cargo build --release --no-default-features --target ${{ matrix.target }}
+
+      - name: Rename binary
+        run: |
+          cp target/${{ matrix.target }}/release/kdeconnect-sms-tui \
+             kdeconnect-sms-tui-${{ matrix.target }}${{ matrix.suffix }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kdeconnect-sms-tui-${{ matrix.target }}${{ matrix.suffix }}
+          path: kdeconnect-sms-tui-${{ matrix.target }}${{ matrix.suffix }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: false
