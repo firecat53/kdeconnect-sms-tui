@@ -34,6 +34,7 @@ const HELP_ENTRIES: &[(&str, &str)] = &[
     ("n/p", "Next/previous search result"),
     ("Esc (search)", "Clear search"),
     ("", ""),
+    ("t / T", "Cycle dark / light themes"),
     ("Ctrl+C", "Quit"),
     ("?", "Show this help"),
 ];

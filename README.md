@@ -60,6 +60,7 @@ are saved per-conversation when you switch away.
 | `/`                            | Search conversations by name or number  |
 | `n` / `p`                      | Next / previous search match            |
 | `Esc`                          | Clear search                            |
+| `t` / `T`                      | Cycle dark / light themes               |
 | `?`                            | Show help popup                         |
 | `q`                            | Quit                                    |
 
@@ -144,7 +145,7 @@ kdeconnect-cli -l
 
 ## State
 
-Application state (group names, archived/spam thread lists) is stored
+Application state (group names, archived/spam thread lists, selected theme) is stored
 at `~/.local/state/kdeconnect-sms-tui/state.toml` (`$XDG_STATE_HOME`).
 This file is managed automatically by the app.
 
@@ -166,6 +167,7 @@ app to sync them.
 - Per-conversation draft messages
 - Archive and spam folders for hiding conversations
 - Auto-restore archived/spam threads on new incoming messages
+- 17 built-in color themes (9 dark, 8 light) with persistent selection
 
 ## Known limitations
 

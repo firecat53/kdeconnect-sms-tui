@@ -21,6 +21,10 @@ pub struct AppState {
     /// Thread IDs hidden in the "Spam" folder.
     #[serde(default)]
     pub spam_threads: Vec<i64>,
+
+    /// Selected theme name (None = default).
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 impl AppState {
@@ -107,6 +111,7 @@ mod tests {
         assert!(state.group_names.is_empty());
         assert!(state.archived_threads.is_empty());
         assert!(state.spam_threads.is_empty());
+        assert!(state.theme.is_none());
     }
 
     #[test]
@@ -134,6 +139,7 @@ mod tests {
         state.group_names.insert("42".into(), "Family Chat".into());
         state.archived_threads = vec![10, 20];
         state.spam_threads = vec![30];
+        state.theme = Some("Dracula".into());
 
         let serialized = toml::to_string_pretty(&state).unwrap();
         let deserialized: AppState = toml::from_str(&serialized).unwrap();
@@ -144,5 +150,18 @@ mod tests {
         );
         assert_eq!(deserialized.archived_threads, vec![10, 20]);
         assert_eq!(deserialized.spam_threads, vec![30]);
+        assert_eq!(deserialized.theme, Some("Dracula".into()));
+    }
+
+    #[test]
+    fn test_deserialize_without_theme_field() {
+        let toml_str = r#"
+archived_threads = []
+spam_threads = []
+
+[group_names]
+"#;
+        let state: AppState = toml::from_str(toml_str).unwrap();
+        assert!(state.theme.is_none());
     }
 }

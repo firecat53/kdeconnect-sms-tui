@@ -290,6 +290,13 @@ impl App {
             connected_at_ms: 0,
         };
 
+        // Apply saved theme (if any).
+        if let Some(ref theme_str) = app.state.theme {
+            if let Ok(name) = theme_str.parse::<crate::ui::theme::ThemeName>() {
+                crate::ui::theme::set_theme(name);
+            }
+        }
+
         app.refresh_devices().await;
 
         // Resolve initial device (non-fatal if kdeconnect is unresponsive)
@@ -667,6 +674,24 @@ impl App {
         self.status_message = Some(msg.into());
         self.status_message_expiry =
             Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+    }
+
+    /// Cycle to the next theme. `light` selects from the light theme list,
+    /// otherwise from the dark theme list.
+    fn cycle_theme(&mut self, light: bool) {
+        use crate::ui::theme;
+        let current = theme::current_theme_name();
+        let next = if light {
+            theme::cycle_light(current)
+        } else {
+            theme::cycle_dark(current)
+        };
+        theme::set_theme(next);
+        self.state.theme = Some(format!("{next}"));
+        if let Err(e) = self.state.save() {
+            tracing::warn!("Failed to save theme preference: {}", e);
+        }
+        self.set_status(format!("Theme: {}", next.display_name()));
     }
 
     /// Set a low-priority status message.  If a previous message has not yet
@@ -1770,6 +1795,10 @@ impl App {
                 }
             }
 
+            // Theme cycling
+            KeyCode::Char('t') => self.cycle_theme(false),
+            KeyCode::Char('T') => self.cycle_theme(true),
+
             _ => {}
         }
     }
@@ -1913,6 +1942,10 @@ impl App {
                     self.maybe_load_more_on_scroll();
                 }
             }
+
+            // Theme cycling
+            KeyCode::Char('t') => self.cycle_theme(false),
+            KeyCode::Char('T') => self.cycle_theme(true),
 
             _ => {}
         }
