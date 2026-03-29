@@ -124,6 +124,8 @@ pub struct ThemePalette {
     pub search_highlight_bg: Color,
     pub search_highlight_sel_fg: Color,
     pub search_highlight_sel_bg: Color,
+    pub bg: Color,
+    pub fg: Color,
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +149,8 @@ const DEFAULT_PALETTE: ThemePalette = ThemePalette {
     search_highlight_bg: Color::Yellow,
     search_highlight_sel_fg: Color::Yellow,
     search_highlight_sel_bg: Color::DarkGray,
+    bg: Color::Reset,
+    fg: Color::Reset,
 };
 
 // ---------------------------------------------------------------------------
@@ -248,6 +252,14 @@ pub fn search_highlight_selected() -> Style {
         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
 }
 
+pub fn background() -> Color {
+    current().bg
+}
+
+pub fn foreground() -> Color {
+    current().fg
+}
+
 // ---------------------------------------------------------------------------
 // Palette definitions per theme
 // ---------------------------------------------------------------------------
@@ -274,6 +286,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(249, 226, 175),// Yellow
             search_highlight_sel_fg: Color::Rgb(249, 226, 175),
             search_highlight_sel_bg: Color::Rgb(88, 91, 112),
+            bg: Color::Rgb(30, 30, 46),                    // Base
+            fg: Color::Rgb(205, 214, 244),                 // Text
         },
 
         // ----- Catppuccin Latte -----
@@ -294,6 +308,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(223, 142, 29), // Yellow
             search_highlight_sel_fg: Color::Rgb(223, 142, 29),
             search_highlight_sel_bg: Color::Rgb(188, 192, 204),
+            bg: Color::Rgb(239, 241, 245),                 // Base
+            fg: Color::Rgb(76, 79, 105),                   // Text
         },
 
         // ----- Nord -----
@@ -314,6 +330,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(235, 203, 139),// Nord13 (yellow)
             search_highlight_sel_fg: Color::Rgb(235, 203, 139),
             search_highlight_sel_bg: Color::Rgb(76, 86, 106),
+            bg: Color::Rgb(46, 52, 64),                    // Nord0
+            fg: Color::Rgb(236, 239, 244),                 // Nord6
         },
 
         // ----- Nord Light -----
@@ -334,6 +352,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(208, 135, 112),// Nord12 (orange)
             search_highlight_sel_fg: Color::Rgb(208, 135, 112),
             search_highlight_sel_bg: Color::Rgb(216, 222, 233),
+            bg: Color::Rgb(236, 239, 244),                 // Nord6
+            fg: Color::Rgb(46, 52, 64),                    // Nord0
         },
 
         // ----- Solarized Dark -----
@@ -354,6 +374,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(181, 137, 0),  // yellow
             search_highlight_sel_fg: Color::Rgb(181, 137, 0),
             search_highlight_sel_bg: Color::Rgb(7, 54, 66),
+            bg: Color::Rgb(0, 43, 54),                     // base03
+            fg: Color::Rgb(147, 161, 161),                 // base1
         },
 
         // ----- Solarized Light -----
@@ -374,6 +396,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(181, 137, 0),  // yellow
             search_highlight_sel_fg: Color::Rgb(181, 137, 0),
             search_highlight_sel_bg: Color::Rgb(238, 232, 213),
+            bg: Color::Rgb(253, 246, 227),                 // base3
+            fg: Color::Rgb(101, 123, 131),                 // base00
         },
 
         // ----- Tokyo Night -----
@@ -394,6 +418,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(224, 175, 104),// yellow
             search_highlight_sel_fg: Color::Rgb(224, 175, 104),
             search_highlight_sel_bg: Color::Rgb(52, 59, 88),
+            bg: Color::Rgb(26, 27, 38),                    // bg
+            fg: Color::Rgb(192, 202, 245),                 // fg
         },
 
         // ----- Tokyo Night Light -----
@@ -414,6 +440,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(142, 109, 37), // yellow
             search_highlight_sel_fg: Color::Rgb(142, 109, 37),
             search_highlight_sel_bg: Color::Rgb(212, 214, 226),
+            bg: Color::Rgb(213, 214, 219),                 // bg
+            fg: Color::Rgb(56, 62, 87),                    // fg
         },
 
         // ----- GitHub Dark -----
@@ -434,6 +462,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(210, 153, 34), // yellow
             search_highlight_sel_fg: Color::Rgb(210, 153, 34),
             search_highlight_sel_bg: Color::Rgb(48, 54, 61),
+            bg: Color::Rgb(13, 17, 23),                    // bg
+            fg: Color::Rgb(230, 237, 243),                 // fg
         },
 
         // ----- GitHub Light -----
@@ -454,6 +484,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(159, 106, 0),  // yellow
             search_highlight_sel_fg: Color::Rgb(159, 106, 0),
             search_highlight_sel_bg: Color::Rgb(218, 224, 231),
+            bg: Color::Rgb(255, 255, 255),                 // white
+            fg: Color::Rgb(31, 35, 40),                    // fg
         },
 
         // ----- Gruvbox Dark -----
@@ -474,6 +506,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(250, 189, 47), // yellow
             search_highlight_sel_fg: Color::Rgb(250, 189, 47),
             search_highlight_sel_bg: Color::Rgb(80, 73, 69),
+            bg: Color::Rgb(40, 40, 40),                    // bg0
+            fg: Color::Rgb(235, 219, 178),                 // fg
         },
 
         // ----- Gruvbox Light -----
@@ -494,6 +528,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(181, 118, 20), // yellow
             search_highlight_sel_fg: Color::Rgb(181, 118, 20),
             search_highlight_sel_bg: Color::Rgb(213, 196, 161),
+            bg: Color::Rgb(251, 241, 199),                 // bg0
+            fg: Color::Rgb(60, 56, 54),                    // fg
         },
 
         // ----- Dracula -----
@@ -514,6 +550,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(241, 250, 140),// yellow
             search_highlight_sel_fg: Color::Rgb(241, 250, 140),
             search_highlight_sel_bg: Color::Rgb(68, 71, 90),
+            bg: Color::Rgb(40, 42, 54),                    // bg
+            fg: Color::Rgb(248, 248, 242),                 // fg
         },
 
         // ----- Dracula Light (soft inversion) -----
@@ -534,6 +572,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(180, 130, 20), // yellow-dark
             search_highlight_sel_fg: Color::Rgb(180, 130, 20),
             search_highlight_sel_bg: Color::Rgb(220, 220, 232),
+            bg: Color::Rgb(248, 248, 242),                 // inverted
+            fg: Color::Rgb(40, 42, 54),                    // inverted
         },
 
         // ----- Rosé Pine -----
@@ -554,6 +594,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(246, 193, 119),// gold
             search_highlight_sel_fg: Color::Rgb(246, 193, 119),
             search_highlight_sel_bg: Color::Rgb(57, 53, 82),
+            bg: Color::Rgb(25, 23, 36),                    // base
+            fg: Color::Rgb(224, 222, 244),                 // text
         },
 
         // ----- Rosé Pine Dawn -----
@@ -574,6 +616,8 @@ fn palette_for(name: ThemeName) -> ThemePalette {
             search_highlight_bg: Color::Rgb(234, 157, 52), // gold
             search_highlight_sel_fg: Color::Rgb(234, 157, 52),
             search_highlight_sel_bg: Color::Rgb(223, 218, 210),
+            bg: Color::Rgb(250, 244, 237),                 // base
+            fg: Color::Rgb(87, 82, 121),                   // text
         },
     }
 }

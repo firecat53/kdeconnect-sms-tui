@@ -63,7 +63,8 @@ pub fn draw(f: &mut Frame) {
         .borders(Borders::ALL)
         .title(" Help ")
         .title_style(theme::title_style())
-        .border_style(theme::active_border());
+        .border_style(theme::active_border())
+        .style(ratatui::style::Style::default().bg(theme::background()));
 
     let lines: Vec<Line> = HELP_ENTRIES
         .iter()

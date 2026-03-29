@@ -151,7 +151,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .title(title.as_str())
         .title_style(theme::title_style())
-        .border_style(theme::active_border());
+        .border_style(theme::active_border())
+        .style(ratatui::style::Style::default().bg(theme::background()));
 
     let inner = block.inner(popup_area);
 

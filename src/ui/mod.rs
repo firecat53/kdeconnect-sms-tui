@@ -104,6 +104,11 @@ pub(crate) fn highlight_matches<'a>(
 pub fn draw(f: &mut Frame, app: &mut App) {
     use ratatui::layout::{Constraint, Direction, Layout};
 
+    // Paint the themed background across the entire frame.
+    let bg_style = Style::default().bg(theme::background()).fg(theme::foreground());
+    let area = f.area();
+    f.buffer_mut().set_style(area, bg_style);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
