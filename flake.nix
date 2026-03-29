@@ -35,10 +35,10 @@
       in {
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "kdeconnect-sms-tui";
-          version = "0.1.0";
+          version = "0.5.1";
           src = ./.;
           useFetchCargoVendor = true;
-          cargoHash = "sha256-QcwMn70GlASJFAWF9oPvyNJajmf+6HShSTKfCbiElGA=";
+          cargoHash = "sha256-eePFEuCbZvZjR/liUtz6i3efIQ7ybjjwg4DOWPJKJ/o=";
 
           inherit nativeBuildInputs buildInputs;
 
