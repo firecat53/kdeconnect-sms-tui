@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -48,6 +48,38 @@ fn name_to_initials(name: &str) -> String {
             format!("{}{}", first.to_uppercase(), last.to_uppercase())
         }
     }
+}
+
+/// Build a normalized, sorted set of phone number suffixes from a message's
+/// address list.  Uses the last 10 digits so that the same number with/without
+/// country code still matches.
+fn normalized_address_set(msg: &Message) -> BTreeSet<String> {
+    msg.addresses
+        .iter()
+        .map(|a| {
+            let digits: String = a.address.chars().filter(|c| c.is_ascii_digit()).collect();
+            if digits.len() > 10 {
+                digits[digits.len() - 10..].to_string()
+            } else {
+                digits
+            }
+        })
+        .collect()
+}
+
+/// Check whether two group address sets represent the same group.
+/// Returns true if the sets are equal, or if the smaller is a subset of the
+/// larger with exactly one extra element (the user's own number in MMS).
+fn group_addresses_match(a: &BTreeSet<String>, b: &BTreeSet<String>) -> bool {
+    if a == b {
+        return true;
+    }
+    let (smaller, larger) = if a.len() < b.len() { (a, b) } else { (b, a) };
+    // Allow at most 1 extra address (the user's own number in MMS)
+    if larger.len() - smaller.len() > 1 {
+        return false;
+    }
+    smaller.is_subset(larger)
 }
 
 /// Loading state for async operations.
@@ -551,6 +583,10 @@ impl App {
                     }
                     self.conversations.push(new_conv);
                 }
+                // Restore known aliases and merge duplicate groups
+                self.apply_thread_aliases();
+                self.merge_duplicate_groups();
+                let _ = self.state.save();
                 self.sort_conversations();
                 self.clear_conv_search();
                 self.clear_msg_search();
@@ -595,13 +631,17 @@ impl App {
             Ok(new_convos) => {
                 // Merge: preserve messages already loaded in existing conversations
                 for new_conv in new_convos {
+                    let resolved = self.state.resolve_thread_id(new_conv.thread_id);
                     if let Some(existing) = self
                         .conversations
                         .iter_mut()
-                        .find(|c| c.thread_id == new_conv.thread_id)
+                        .find(|c| {
+                            c.thread_id == resolved
+                                || c.alias_thread_ids.contains(&new_conv.thread_id)
+                        })
                     {
                         // Update metadata but keep loaded messages
-                        existing.is_group = new_conv.is_group;
+                        existing.is_group = existing.is_group || new_conv.is_group;
                         if let Some(ref new_latest) = new_conv.latest_message {
                             let dominated = existing
                                 .latest_message
@@ -615,6 +655,9 @@ impl App {
                         self.conversations.push(new_conv);
                     }
                 }
+                // Merge any newly-appeared duplicate groups
+                self.merge_duplicate_groups();
+                let _ = self.state.save();
                 self.sort_conversations();
                 self.loading = LoadingState::Idle;
 
@@ -632,6 +675,161 @@ impl App {
                 // Connection may be stale — drop client so retry can reconnect.
                 self.conversations_client = None;
             }
+        }
+    }
+
+    /// Restore alias_thread_ids on conversations from persisted state, and
+    /// absorb any aliased conversations that D-Bus returned as separate entries.
+    fn apply_thread_aliases(&mut self) {
+        // First, populate alias_thread_ids from persisted aliases
+        for (alias_str, canonical_str) in &self.state.thread_aliases {
+            let Ok(alias) = alias_str.parse::<i64>() else {
+                continue;
+            };
+            let Ok(canonical) = canonical_str.parse::<i64>() else {
+                continue;
+            };
+            if let Some(conv) = self
+                .conversations
+                .iter_mut()
+                .find(|c| c.thread_id == canonical)
+            {
+                if !conv.alias_thread_ids.contains(&alias) {
+                    conv.alias_thread_ids.push(alias);
+                }
+            }
+        }
+
+        // Now absorb any conversations whose thread_id is a known alias
+        // into their canonical conversation
+        let alias_map: HashMap<i64, i64> = self
+            .state
+            .thread_aliases
+            .iter()
+            .filter_map(|(k, v)| {
+                let alias = k.parse::<i64>().ok()?;
+                let canonical = v.parse::<i64>().ok()?;
+                Some((alias, canonical))
+            })
+            .collect();
+
+        // Drain conversations that are aliases, collecting their messages
+        let mut alias_data: Vec<(i64, Conversation)> = Vec::new();
+        self.conversations.retain(|c| {
+            if alias_map.contains_key(&c.thread_id) {
+                alias_data.push((c.thread_id, c.clone()));
+                false
+            } else {
+                true
+            }
+        });
+
+        // Merge alias conversation data into canonical conversations
+        for (alias_tid, alias_conv) in alias_data {
+            let canonical = alias_map[&alias_tid];
+            if let Some(conv) = self
+                .conversations
+                .iter_mut()
+                .find(|c| c.thread_id == canonical)
+            {
+                for msg in alias_conv.messages {
+                    insert_message_sorted(&mut conv.messages, msg);
+                }
+                if let Some(ref alias_latest) = alias_conv.latest_message {
+                    let is_newer = conv
+                        .latest_message
+                        .as_ref()
+                        .is_none_or(|e| alias_latest.date > e.date);
+                    if is_newer {
+                        conv.latest_message = alias_conv.latest_message;
+                    }
+                }
+                conv.is_group = true;
+            }
+        }
+    }
+
+    /// Detect and merge group conversations that have different thread_ids
+    /// but the same set of participants.  This handles the case where Android
+    /// assigns separate thread_ids to SMS vs MMS for the same group.
+    fn merge_duplicate_groups(&mut self) {
+        let mut i = 0;
+        while i < self.conversations.len() {
+            if !self.conversations[i].is_group {
+                i += 1;
+                continue;
+            }
+            let addrs_i = self.conversations[i]
+                .latest_message
+                .as_ref()
+                .map(normalized_address_set)
+                .unwrap_or_default();
+            if addrs_i.len() < 2 {
+                i += 1;
+                continue;
+            }
+
+            let mut j = i + 1;
+            while j < self.conversations.len() {
+                if !self.conversations[j].is_group {
+                    j += 1;
+                    continue;
+                }
+                let addrs_j = self.conversations[j]
+                    .latest_message
+                    .as_ref()
+                    .map(normalized_address_set)
+                    .unwrap_or_default();
+                if addrs_j.len() < 2 || !group_addresses_match(&addrs_i, &addrs_j) {
+                    j += 1;
+                    continue;
+                }
+
+                // Merge j into i: i is canonical, j is the alias
+                let dup = self.conversations.remove(j);
+                let canonical_tid = self.conversations[i].thread_id;
+                let alias_tid = dup.thread_id;
+
+                info!(
+                    "Merging duplicate group thread {} into {} (participant match)",
+                    alias_tid, canonical_tid
+                );
+
+                // Record alias
+                if !self.conversations[i]
+                    .alias_thread_ids
+                    .contains(&alias_tid)
+                {
+                    self.conversations[i].alias_thread_ids.push(alias_tid);
+                }
+                // Also record any aliases the duplicate had
+                for tid in &dup.alias_thread_ids {
+                    if !self.conversations[i].alias_thread_ids.contains(tid) {
+                        self.conversations[i].alias_thread_ids.push(*tid);
+                    }
+                }
+
+                // Merge messages
+                for msg in dup.messages {
+                    insert_message_sorted(&mut self.conversations[i].messages, msg);
+                }
+                if let Some(ref dup_latest) = dup.latest_message {
+                    let is_newer = self.conversations[i]
+                        .latest_message
+                        .as_ref()
+                        .is_none_or(|e| dup_latest.date > e.date);
+                    if is_newer {
+                        self.conversations[i].latest_message = dup.latest_message;
+                    }
+                }
+
+                // Persist the alias
+                self.state.add_thread_alias(alias_tid, canonical_tid);
+                self.state.migrate_alias_state(alias_tid, canonical_tid);
+
+                // Don't increment j — the next element shifted into position j
+            }
+            i += 1;
         }
     }
 
@@ -879,10 +1077,16 @@ impl App {
             }
             AppEvent::ConversationLoaded(thread_id, message_count) => {
                 // Record the total message count so pagination knows when to stop.
+                // Resolve aliases so signals from merged threads update the
+                // canonical conversation.
+                let canonical = self.state.resolve_thread_id(thread_id);
                 if let Some(conv) = self
                     .conversations
                     .iter_mut()
-                    .find(|c| c.thread_id == thread_id)
+                    .find(|c| {
+                        c.thread_id == canonical
+                            || c.alias_thread_ids.contains(&thread_id)
+                    })
                 {
                     // When kdeconnectd discovers more messages (total increases),
                     // reset messages_requested to what we actually have so that
@@ -954,25 +1158,54 @@ impl App {
     fn handle_conversation_created(&mut self, msg: Message) {
         let thread_id = msg.thread_id;
 
+        // Resolve through aliases — Android may use a different thread_id for
+        // SMS vs MMS in the same group conversation.
+        let canonical = self.state.resolve_thread_id(thread_id);
+
         // If a genuinely new incoming message arrives for a hidden conversation,
         // restore it.  Messages older than our connection time are replayed
         // history from kdeconnectd and should not trigger unarchive.
-        if msg.date > self.connected_at_ms && msg.is_incoming() && self.state.is_hidden(thread_id) {
-            self.state.unarchive(thread_id);
+        if msg.date > self.connected_at_ms
+            && msg.is_incoming()
+            && self.state.is_hidden(canonical)
+        {
+            self.state.unarchive(canonical);
             let _ = self.state.save();
         }
 
-        // Check if we already have this thread
+        // Check if we already have this thread (by canonical id or alias)
+        let existing_idx = self
+            .conversations
+            .iter()
+            .position(|c| {
+                c.thread_id == canonical || c.alias_thread_ids.contains(&thread_id)
+            });
+
+        // If not found by thread_id, try matching by group participants
+        let merge_idx = existing_idx.or_else(|| self.find_group_by_participants(&msg));
+
         let is_selected = self
             .selected_conversation_idx
             .and_then(|i| self.conversations.get(i))
-            .is_some_and(|c| c.thread_id == thread_id);
+            .is_some_and(|c| {
+                c.thread_id == canonical || c.alias_thread_ids.contains(&thread_id)
+            });
 
-        if let Some(conv) = self
-            .conversations
-            .iter_mut()
-            .find(|c| c.thread_id == thread_id)
-        {
+        if let Some(idx) = merge_idx {
+            let conv = &mut self.conversations[idx];
+
+            // If this is a new alias we haven't seen, record it
+            if conv.thread_id != thread_id && !conv.alias_thread_ids.contains(&thread_id) {
+                info!(
+                    "Merging thread {} into canonical {} (participant match)",
+                    thread_id, conv.thread_id
+                );
+                conv.alias_thread_ids.push(thread_id);
+                self.state.add_thread_alias(thread_id, conv.thread_id);
+                self.state.migrate_alias_state(thread_id, conv.thread_id);
+                let _ = self.state.save();
+            }
+
             conv.is_group = conv.is_group || msg.addresses.len() > 2;
             let is_newer = conv
                 .latest_message
@@ -1009,24 +1242,32 @@ impl App {
     /// Handle a conversation update (new message in existing thread).
     fn handle_conversation_updated(&mut self, msg: Message) {
         let thread_id = msg.thread_id;
+        let canonical = self.state.resolve_thread_id(thread_id);
 
         // If a genuinely new incoming message arrives for a hidden conversation,
         // restore it.  Messages older than our connection time are replayed
         // history from kdeconnectd and should not trigger unarchive.
-        if msg.date > self.connected_at_ms && msg.is_incoming() && self.state.is_hidden(thread_id) {
-            self.state.unarchive(thread_id);
+        if msg.date > self.connected_at_ms
+            && msg.is_incoming()
+            && self.state.is_hidden(canonical)
+        {
+            self.state.unarchive(canonical);
             let _ = self.state.save();
         }
 
         let is_selected = self
             .selected_conversation_idx
             .and_then(|i| self.conversations.get(i))
-            .is_some_and(|c| c.thread_id == thread_id);
+            .is_some_and(|c| {
+                c.thread_id == canonical || c.alias_thread_ids.contains(&thread_id)
+            });
 
         if let Some(conv) = self
             .conversations
             .iter_mut()
-            .find(|c| c.thread_id == thread_id)
+            .find(|c| {
+                c.thread_id == canonical || c.alias_thread_ids.contains(&thread_id)
+            })
         {
             let is_newer = conv
                 .latest_message
@@ -1049,7 +1290,7 @@ impl App {
                 }
             }
         } else {
-            // New thread we didn't know about
+            // New thread we didn't know about — may be a group duplicate
             self.handle_conversation_created(msg);
             return;
         }
@@ -1091,6 +1332,7 @@ impl App {
         }
 
         let thread_id = conv.thread_id;
+        let alias_ids = conv.alias_thread_ids.clone();
         let end = Self::MESSAGE_PAGE_SIZE;
         conv.messages_requested = end;
 
@@ -1099,7 +1341,9 @@ impl App {
         let request_epoch = self.phone_request_epoch.clone();
         let epoch = self.current_phone_request_epoch();
 
-        // Fire-and-forget: the phone will send messages back via D-Bus signals
+        // Fire-and-forget: the phone will send messages back via D-Bus signals.
+        // Request from canonical thread_id plus all aliases so we get all
+        // messages from both SMS and MMS threads.
         tokio::spawn(async move {
             if request_epoch.load(Ordering::Relaxed) != epoch {
                 tracing::debug!(
@@ -1111,6 +1355,16 @@ impl App {
             let client = ConversationsClient::new(connection, device_id);
             if let Err(e) = client.request_conversation(thread_id, 0, end).await {
                 tracing::warn!("Failed to request conversation {}: {}", thread_id, e);
+            }
+            // Also request messages from aliased thread_ids
+            for alias_tid in alias_ids {
+                if let Err(e) = client.request_conversation(alias_tid, 0, end).await {
+                    tracing::warn!(
+                        "Failed to request aliased conversation {}: {}",
+                        alias_tid,
+                        e
+                    );
+                }
             }
         });
 
@@ -1143,6 +1397,7 @@ impl App {
         };
 
         let thread_id = conv.thread_id;
+        let alias_ids = conv.alias_thread_ids.clone();
         let start = conv.messages_requested;
         let end = start + Self::MESSAGE_PAGE_SIZE;
         conv.messages_requested = end;
@@ -1162,6 +1417,11 @@ impl App {
             let client = ConversationsClient::new(connection, device_id);
             if let Err(e) = client.request_conversation(thread_id, start, end).await {
                 tracing::warn!("Failed to load more messages for {}: {}", thread_id, e);
+            }
+            for alias_tid in alias_ids {
+                if let Err(e) = client.request_conversation(alias_tid, start, end).await {
+                    tracing::warn!("Failed to load more messages for alias {}: {}", alias_tid, e);
+                }
             }
         });
     }
@@ -1209,6 +1469,7 @@ impl App {
             // Retry requestConversation and bump messages_requested so we can
             // detect repeated failures.
             let thread_id = conv.thread_id;
+            let alias_ids = conv.alias_thread_ids.clone();
             if let Some(conv) = self.conversations.get_mut(idx) {
                 conv.messages_requested += Self::MESSAGE_PAGE_SIZE;
             }
@@ -1233,6 +1494,11 @@ impl App {
                 let client = ConversationsClient::new(connection, device_id);
                 if let Err(e) = client.request_conversation(thread_id, 0, end).await {
                     tracing::warn!("Retry: failed to request conversation {}: {}", thread_id, e);
+                }
+                for alias_tid in alias_ids {
+                    if let Err(e) = client.request_conversation(alias_tid, 0, end).await {
+                        tracing::warn!("Retry: failed to request alias {}: {}", alias_tid, e);
+                    }
                 }
             });
             return;
@@ -1324,6 +1590,19 @@ impl App {
 
     /// Handle a conversation being removed.
     fn handle_conversation_removed(&mut self, thread_id: i64) {
+        // If this is an aliased thread_id, don't remove the canonical conversation
+        let canonical = self.state.resolve_thread_id(thread_id);
+        if canonical != thread_id {
+            // Just remove the alias — the canonical conversation stays
+            if let Some(conv) = self
+                .conversations
+                .iter_mut()
+                .find(|c| c.thread_id == canonical)
+            {
+                conv.alias_thread_ids.retain(|&t| t != thread_id);
+            }
+            return;
+        }
         let prev_len = self.conversations.len();
         self.conversations.retain(|c| c.thread_id != thread_id);
 
@@ -1345,7 +1624,9 @@ impl App {
     fn auto_request_attachments_for(&mut self, thread_id: i64) {
         if let Some(idx) = self.selected_conversation_idx {
             if let Some(conv) = self.conversations.get(idx) {
-                if conv.thread_id == thread_id {
+                if conv.thread_id == thread_id
+                    || conv.alias_thread_ids.contains(&thread_id)
+                {
                     self.request_conversation_attachments();
                 }
             }
@@ -2979,6 +3260,32 @@ impl App {
             .join(",")
     }
 
+    /// Find an existing group conversation whose participants match the given
+    /// message's address list.  Returns the index if found.
+    fn find_group_by_participants(&self, msg: &Message) -> Option<usize> {
+        if msg.addresses.len() <= 2 {
+            return None; // Not a group message
+        }
+        let incoming_addrs = normalized_address_set(msg);
+        if incoming_addrs.len() < 2 {
+            return None;
+        }
+        self.conversations.iter().position(|conv| {
+            if !conv.is_group {
+                return false;
+            }
+            let conv_addrs = conv
+                .latest_message
+                .as_ref()
+                .map(normalized_address_set)
+                .unwrap_or_default();
+            if conv_addrs.len() < 2 {
+                return false;
+            }
+            group_addresses_match(&incoming_addrs, &conv_addrs)
+        })
+    }
+
     /// Get the sorted member list for the group info popup.
     pub fn group_members(&self) -> Vec<(String, String)> {
         let Some(idx) = self.selected_conversation_idx else {
@@ -4583,6 +4890,7 @@ mod tests {
             total_messages: None,
             loading_more_messages: false,
             loading_started_tick: None,
+            alias_thread_ids: Vec::new(),
         }];
         app.selected_conversation_idx = Some(0);
 
@@ -4633,6 +4941,7 @@ mod tests {
             total_messages: None,
             loading_more_messages: false,
             loading_started_tick: None,
+            alias_thread_ids: Vec::new(),
         }];
         app.selected_conversation_idx = Some(0);
 
@@ -4681,5 +4990,180 @@ mod tests {
         app.maybe_load_more_on_scroll();
         // Verify it didn't panic and the method ran
         // (actual D-Bus loading won't happen in test, but the path is exercised)
+    }
+
+    // ── Group deduplication tests ────────────────────────────────────
+
+    fn make_group_message(
+        thread_id: i64,
+        date: i64,
+        body: &str,
+        addrs: &[&str],
+    ) -> Message {
+        Message {
+            event: 0x1,
+            body: body.into(),
+            addresses: addrs
+                .iter()
+                .map(|a| Address {
+                    address: a.to_string(),
+                })
+                .collect(),
+            date,
+            message_type: MessageType::Inbox,
+            read: false,
+            thread_id,
+            uid: date as i32,
+            sub_id: -1,
+            attachments: vec![],
+        }
+    }
+
+    #[test]
+    fn test_normalized_address_set() {
+        let msg = make_group_message(1, 1000, "hi", &["+15551234567", "+15559876543", "+15550001111"]);
+        let addrs = super::normalized_address_set(&msg);
+        assert_eq!(addrs.len(), 3);
+        assert!(addrs.contains("5551234567"));
+        assert!(addrs.contains("5559876543"));
+        assert!(addrs.contains("5550001111"));
+    }
+
+    #[test]
+    fn test_group_addresses_match_exact() {
+        let a: BTreeSet<String> = ["5551234567", "5559876543"]
+            .iter().map(|s| s.to_string()).collect();
+        let b: BTreeSet<String> = ["5551234567", "5559876543"]
+            .iter().map(|s| s.to_string()).collect();
+        assert!(super::group_addresses_match(&a, &b));
+    }
+
+    #[test]
+    fn test_group_addresses_match_subset_by_one() {
+        // MMS includes self number, SMS does not
+        let sms: BTreeSet<String> = ["5551234567", "5559876543"]
+            .iter().map(|s| s.to_string()).collect();
+        let mms: BTreeSet<String> = ["5550000000", "5551234567", "5559876543"]
+            .iter().map(|s| s.to_string()).collect();
+        assert!(super::group_addresses_match(&sms, &mms));
+    }
+
+    #[test]
+    fn test_group_addresses_no_match_different_groups() {
+        let a: BTreeSet<String> = ["5551111111", "5552222222"]
+            .iter().map(|s| s.to_string()).collect();
+        let b: BTreeSet<String> = ["5553333333", "5554444444"]
+            .iter().map(|s| s.to_string()).collect();
+        assert!(!super::group_addresses_match(&a, &b));
+    }
+
+    #[test]
+    fn test_group_addresses_no_match_differ_by_two() {
+        let a: BTreeSet<String> = ["5551111111", "5552222222"]
+            .iter().map(|s| s.to_string()).collect();
+        let b: BTreeSet<String> = ["5551111111", "5552222222", "5553333333", "5554444444"]
+            .iter().map(|s| s.to_string()).collect();
+        assert!(!super::group_addresses_match(&a, &b));
+    }
+
+    #[test]
+    fn test_group_dedup_via_conversation_created() {
+        let mut app = App::new_test();
+
+        // Create a group conversation (SMS, thread 100)
+        let msg1 = make_group_message(
+            100, 1000, "Hey group!",
+            &["+15551111111", "+15552222222", "+15553333333"],
+        );
+        app.handle_conversation_created(msg1);
+        assert_eq!(app.conversations.len(), 1);
+        assert_eq!(app.conversations[0].thread_id, 100);
+        assert!(app.conversations[0].is_group);
+
+        // Incoming reply on a different thread_id (MMS, thread 200) with same
+        // participants + self number
+        let msg2 = make_group_message(
+            200, 2000, "Reply!",
+            &["+15550000000", "+15551111111", "+15552222222", "+15553333333"],
+        );
+        app.handle_conversation_created(msg2);
+
+        // Should still be one conversation — merged
+        assert_eq!(app.conversations.len(), 1);
+        assert_eq!(app.conversations[0].thread_id, 100);
+        assert!(app.conversations[0].alias_thread_ids.contains(&200));
+        assert_eq!(app.conversations[0].messages.len(), 2);
+
+        // State should have the alias persisted
+        assert_eq!(app.state.resolve_thread_id(200), 100);
+    }
+
+    #[test]
+    fn test_group_dedup_alias_resolved_on_update() {
+        let mut app = App::new_test();
+
+        // Set up a known alias
+        app.state.add_thread_alias(200, 100);
+
+        // Create canonical conversation
+        let msg1 = make_group_message(
+            100, 1000, "Hey",
+            &["+15551111111", "+15552222222", "+15553333333"],
+        );
+        app.handle_conversation_created(msg1);
+
+        // Update arrives for aliased thread_id
+        let msg2 = make_group_message(
+            200, 2000, "Reply via alias",
+            &["+15550000000", "+15551111111", "+15552222222", "+15553333333"],
+        );
+        app.handle_conversation_updated(msg2);
+
+        // Should route to existing conversation
+        assert_eq!(app.conversations.len(), 1);
+        assert_eq!(app.conversations[0].messages.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_duplicate_groups() {
+        let mut app = App::new_test();
+
+        // Simulate two group conversations with same participants
+        let mut conv1 = Conversation::new(100);
+        conv1.is_group = true;
+        conv1.latest_message = Some(make_group_message(
+            100, 1000, "sent",
+            &["+15551111111", "+15552222222", "+15553333333"],
+        ));
+        conv1.messages.push(conv1.latest_message.clone().unwrap());
+
+        let mut conv2 = Conversation::new(200);
+        conv2.is_group = true;
+        conv2.latest_message = Some(make_group_message(
+            200, 2000, "reply",
+            &["+15550000000", "+15551111111", "+15552222222", "+15553333333"],
+        ));
+        conv2.messages.push(conv2.latest_message.clone().unwrap());
+
+        app.conversations = vec![conv1, conv2];
+        app.merge_duplicate_groups();
+
+        assert_eq!(app.conversations.len(), 1);
+        assert_eq!(app.conversations[0].thread_id, 100);
+        assert_eq!(app.conversations[0].messages.len(), 2);
+        assert!(app.conversations[0].alias_thread_ids.contains(&200));
+    }
+
+    #[test]
+    fn test_no_merge_for_non_groups() {
+        let mut app = App::new_test();
+
+        // Two 1:1 conversations with same address should NOT merge
+        let msg1 = make_test_message(100, 1000, "hi");
+        app.handle_conversation_created(msg1);
+        let msg2 = make_test_message(200, 2000, "hello");
+        app.handle_conversation_created(msg2);
+
+        assert_eq!(app.conversations.len(), 2);
     }
 }

@@ -26,6 +26,11 @@ pub struct Conversation {
     /// Tick counter when loading started, used to detect timeouts.
     #[serde(skip)]
     pub loading_started_tick: Option<u32>,
+    /// Other thread_ids that have been merged into this conversation.
+    /// Android can assign different thread IDs to SMS vs MMS for the same
+    /// group; this tracks the aliases so we can request messages from all.
+    #[serde(default)]
+    pub alias_thread_ids: Vec<i64>,
 }
 
 impl Conversation {
@@ -40,6 +45,7 @@ impl Conversation {
             total_messages: None,
             loading_more_messages: false,
             loading_started_tick: None,
+            alias_thread_ids: Vec::new(),
         }
     }
 
@@ -109,6 +115,7 @@ mod tests {
             total_messages: None,
             loading_more_messages: false,
             loading_started_tick: None,
+            alias_thread_ids: Vec::new(),
         }
     }
 

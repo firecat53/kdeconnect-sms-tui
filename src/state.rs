@@ -25,6 +25,13 @@ pub struct AppState {
     /// Selected theme name (None = default).
     #[serde(default)]
     pub theme: Option<String>,
+
+    /// Thread ID aliases for merged group conversations.
+    /// Maps alias_thread_id → canonical_thread_id (both as strings for TOML).
+    /// When Android assigns different thread IDs to SMS vs MMS for the same
+    /// group, this lets us route all messages to the canonical conversation.
+    #[serde(default)]
+    pub thread_aliases: HashMap<String, String>,
 }
 
 impl AppState {
@@ -80,6 +87,43 @@ impl AppState {
             // Remove from archive if moving to spam
             self.archived_threads.retain(|&t| t != thread_id);
             self.spam_threads.push(thread_id);
+        }
+    }
+
+    /// Resolve a thread_id to its canonical ID (following aliases).
+    pub fn resolve_thread_id(&self, thread_id: i64) -> i64 {
+        self.thread_aliases
+            .get(&thread_id.to_string())
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(thread_id)
+    }
+
+    /// Record that `alias` should be merged into `canonical`.
+    pub fn add_thread_alias(&mut self, alias: i64, canonical: i64) {
+        self.thread_aliases
+            .insert(alias.to_string(), canonical.to_string());
+    }
+
+    /// Migrate state entries (group_names, archived, spam) from an alias
+    /// thread_id to the canonical one.
+    pub fn migrate_alias_state(&mut self, alias: i64, canonical: i64) {
+        // Migrate group name (prefer canonical's existing name)
+        let alias_key = alias.to_string();
+        let canonical_key = canonical.to_string();
+        if !self.group_names.contains_key(&canonical_key) {
+            if let Some(name) = self.group_names.remove(&alias_key) {
+                self.group_names.insert(canonical_key, name);
+            }
+        } else {
+            self.group_names.remove(&alias_key);
+        }
+
+        // Migrate archived/spam status
+        if self.archived_threads.contains(&alias) {
+            self.archived_threads.retain(|&t| t != alias);
+        }
+        if self.spam_threads.contains(&alias) {
+            self.spam_threads.retain(|&t| t != alias);
         }
     }
 
@@ -151,6 +195,51 @@ mod tests {
         assert_eq!(deserialized.archived_threads, vec![10, 20]);
         assert_eq!(deserialized.spam_threads, vec![30]);
         assert_eq!(deserialized.theme, Some("Dracula".into()));
+    }
+
+    #[test]
+    fn test_thread_alias_resolve() {
+        let mut state = AppState::default();
+        assert_eq!(state.resolve_thread_id(100), 100); // no alias
+        state.add_thread_alias(200, 100);
+        assert_eq!(state.resolve_thread_id(200), 100);
+        assert_eq!(state.resolve_thread_id(100), 100); // canonical unchanged
+    }
+
+    #[test]
+    fn test_migrate_alias_state() {
+        let mut state = AppState::default();
+        state.group_names.insert("200".into(), "BCs".into());
+        state.archived_threads.push(200);
+        state.migrate_alias_state(200, 100);
+        // Name migrated to canonical
+        assert_eq!(state.group_names.get("100"), Some(&"BCs".to_string()));
+        assert!(!state.group_names.contains_key("200"));
+        // Archive entry removed for alias
+        assert!(!state.archived_threads.contains(&200));
+    }
+
+    #[test]
+    fn test_migrate_alias_state_canonical_name_preferred() {
+        let mut state = AppState::default();
+        state.group_names.insert("100".into(), "Family".into());
+        state.group_names.insert("200".into(), "BCs".into());
+        state.migrate_alias_state(200, 100);
+        // Canonical's existing name is preserved
+        assert_eq!(state.group_names.get("100"), Some(&"Family".to_string()));
+        assert!(!state.group_names.contains_key("200"));
+    }
+
+    #[test]
+    fn test_deserialize_without_thread_aliases() {
+        let toml_str = r#"
+archived_threads = []
+spam_threads = []
+
+[group_names]
+"#;
+        let state: AppState = toml::from_str(toml_str).unwrap();
+        assert!(state.thread_aliases.is_empty());
     }
 
     #[test]

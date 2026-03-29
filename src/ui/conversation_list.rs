@@ -376,6 +376,7 @@ mod tests {
             total_messages: None,
             loading_more_messages: false,
             loading_started_tick: None,
+            alias_thread_ids: Vec::new(),
         });
 
         let backend = TestBackend::new(40, 10);
@@ -404,6 +405,7 @@ mod tests {
             total_messages: None,
             loading_more_messages: false,
             loading_started_tick: None,
+            alias_thread_ids: Vec::new(),
         });
 
         let backend = TestBackend::new(40, 10);

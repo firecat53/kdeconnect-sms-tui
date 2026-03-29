@@ -638,6 +638,7 @@ mod tests {
             total_messages: None,
             loading_more_messages: false,
             loading_started_tick: None,
+            alias_thread_ids: Vec::new(),
         });
         app.selected_conversation_idx = Some(0);
 
@@ -669,6 +670,7 @@ mod tests {
             total_messages: None,
             loading_more_messages: false,
             loading_started_tick: None,
+            alias_thread_ids: Vec::new(),
         });
         app.selected_conversation_idx = Some(0);
 
@@ -698,6 +700,7 @@ mod tests {
             total_messages: None,
             loading_more_messages: false,
             loading_started_tick: None,
+            alias_thread_ids: Vec::new(),
         });
         app.selected_conversation_idx = Some(0);
 
@@ -747,6 +750,7 @@ mod tests {
             total_messages: None,
             loading_more_messages: false,
             loading_started_tick: None,
+            alias_thread_ids: Vec::new(),
         });
         app.selected_conversation_idx = Some(0);
 
@@ -816,6 +820,7 @@ mod tests {
             total_messages: None,
             loading_more_messages: false,
             loading_started_tick: None,
+            alias_thread_ids: Vec::new(),
         });
         app.selected_conversation_idx = Some(0);
         app.selected_message_idx = Some(0);
