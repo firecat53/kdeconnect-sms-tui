@@ -491,6 +491,14 @@ impl App {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
+
+        // Clear stale in-flight attachment state so reconnect can re-request any
+        // attachments that were stuck in Downloading (e.g. if the previous daemon
+        // session died before emitting attachmentReceived).
+        self.pending_attachments.clear();
+        self.image_states
+            .retain(|_, v| !matches!(v, ImageState::Downloading));
+
         self.set_status(format!("Connected to {}", device.name));
         // kdeconnectd progressively discovers messages from the phone across
         // multiple requestAllConversationThreads calls.  Schedule a few
@@ -1356,8 +1364,16 @@ impl App {
             if let Err(e) = client.request_conversation(thread_id, 0, end).await {
                 tracing::warn!("Failed to request conversation {}: {}", thread_id, e);
             }
-            // Also request messages from aliased thread_ids
+            // Also request messages from aliased thread_ids, re-checking the epoch
+            // before each call so we bail out if a send started after the first await.
             for alias_tid in alias_ids {
+                if request_epoch.load(Ordering::Relaxed) != epoch {
+                    tracing::debug!(
+                        "Aborting aliased requestConversation for thread {} (stale epoch)",
+                        alias_tid
+                    );
+                    return;
+                }
                 if let Err(e) = client.request_conversation(alias_tid, 0, end).await {
                     tracing::warn!(
                         "Failed to request aliased conversation {}: {}",
@@ -1419,6 +1435,13 @@ impl App {
                 tracing::warn!("Failed to load more messages for {}: {}", thread_id, e);
             }
             for alias_tid in alias_ids {
+                if request_epoch.load(Ordering::Relaxed) != epoch {
+                    tracing::debug!(
+                        "Aborting aliased load-more for thread {} (stale epoch)",
+                        alias_tid
+                    );
+                    return;
+                }
                 if let Err(e) = client.request_conversation(alias_tid, start, end).await {
                     tracing::warn!("Failed to load more messages for alias {}: {}", alias_tid, e);
                 }
@@ -1496,6 +1519,13 @@ impl App {
                     tracing::warn!("Retry: failed to request conversation {}: {}", thread_id, e);
                 }
                 for alias_tid in alias_ids {
+                    if request_epoch.load(Ordering::Relaxed) != epoch {
+                        tracing::debug!(
+                            "Aborting retry alias requestConversation for thread {} (stale epoch)",
+                            alias_tid
+                        );
+                        return;
+                    }
                     if let Err(e) = client.request_conversation(alias_tid, 0, end).await {
                         tracing::warn!("Retry: failed to request alias {}: {}", alias_tid, e);
                     }
