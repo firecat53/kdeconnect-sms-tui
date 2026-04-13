@@ -22,6 +22,10 @@ pub struct AppState {
     #[serde(default)]
     pub spam_threads: Vec<i64>,
 
+    /// Thread IDs hidden in the "Trash" folder.
+    #[serde(default)]
+    pub trash_threads: Vec<i64>,
+
     /// Selected theme name (None = default).
     #[serde(default)]
     pub theme: Option<String>,
@@ -66,16 +70,21 @@ impl AppState {
         self.spam_threads.contains(&thread_id)
     }
 
+    pub fn is_trash(&self, thread_id: i64) -> bool {
+        self.trash_threads.contains(&thread_id)
+    }
+
     pub fn is_hidden(&self, thread_id: i64) -> bool {
-        self.is_archived(thread_id) || self.is_spam(thread_id)
+        self.is_archived(thread_id) || self.is_spam(thread_id) || self.is_trash(thread_id)
     }
 
     pub fn toggle_archived(&mut self, thread_id: i64) {
         if let Some(pos) = self.archived_threads.iter().position(|&t| t == thread_id) {
             self.archived_threads.remove(pos);
         } else {
-            // Remove from spam if moving to archive
+            // Remove from spam/trash if moving to archive
             self.spam_threads.retain(|&t| t != thread_id);
+            self.trash_threads.retain(|&t| t != thread_id);
             self.archived_threads.push(thread_id);
         }
     }
@@ -84,9 +93,21 @@ impl AppState {
         if let Some(pos) = self.spam_threads.iter().position(|&t| t == thread_id) {
             self.spam_threads.remove(pos);
         } else {
-            // Remove from archive if moving to spam
+            // Remove from archive/trash if moving to spam
             self.archived_threads.retain(|&t| t != thread_id);
+            self.trash_threads.retain(|&t| t != thread_id);
             self.spam_threads.push(thread_id);
+        }
+    }
+
+    pub fn toggle_trash(&mut self, thread_id: i64) {
+        if let Some(pos) = self.trash_threads.iter().position(|&t| t == thread_id) {
+            self.trash_threads.remove(pos);
+        } else {
+            // Remove from archive/spam if moving to trash
+            self.archived_threads.retain(|&t| t != thread_id);
+            self.spam_threads.retain(|&t| t != thread_id);
+            self.trash_threads.push(thread_id);
         }
     }
 
@@ -118,19 +139,23 @@ impl AppState {
             self.group_names.remove(&alias_key);
         }
 
-        // Migrate archived/spam status
+        // Migrate archived/spam/trash status
         if self.archived_threads.contains(&alias) {
             self.archived_threads.retain(|&t| t != alias);
         }
         if self.spam_threads.contains(&alias) {
             self.spam_threads.retain(|&t| t != alias);
         }
+        if self.trash_threads.contains(&alias) {
+            self.trash_threads.retain(|&t| t != alias);
+        }
     }
 
-    /// Remove a thread from both archived and spam lists (restore to inbox).
+    /// Remove a thread from archived, spam, and trash lists (restore to inbox).
     pub fn unarchive(&mut self, thread_id: i64) {
         self.archived_threads.retain(|&t| t != thread_id);
         self.spam_threads.retain(|&t| t != thread_id);
+        self.trash_threads.retain(|&t| t != thread_id);
     }
 
     fn state_path() -> PathBuf {
@@ -155,11 +180,12 @@ mod tests {
         assert!(state.group_names.is_empty());
         assert!(state.archived_threads.is_empty());
         assert!(state.spam_threads.is_empty());
+        assert!(state.trash_threads.is_empty());
         assert!(state.theme.is_none());
     }
 
     #[test]
-    fn test_archive_spam_toggle() {
+    fn test_archive_spam_trash_toggle() {
         let mut state = AppState::default();
 
         state.toggle_archived(1);
@@ -172,9 +198,28 @@ mod tests {
         assert!(state.is_spam(1));
         assert!(state.is_hidden(1));
 
-        // Unarchive removes from both
-        state.unarchive(1);
+        // Moving to trash removes from spam
+        state.toggle_trash(1);
+        assert!(!state.is_spam(1));
+        assert!(state.is_trash(1));
+        assert!(state.is_hidden(1));
+
+        // Toggle trash again removes from trash
+        state.toggle_trash(1);
+        assert!(!state.is_trash(1));
         assert!(!state.is_hidden(1));
+
+        // Moving to archive removes from trash
+        state.toggle_trash(2);
+        assert!(state.is_trash(2));
+        state.toggle_archived(2);
+        assert!(!state.is_trash(2));
+        assert!(state.is_archived(2));
+
+        // Unarchive removes from all
+        state.toggle_trash(3);
+        state.unarchive(3);
+        assert!(!state.is_hidden(3));
     }
 
     #[test]

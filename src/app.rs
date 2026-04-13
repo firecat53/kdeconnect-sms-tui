@@ -110,6 +110,7 @@ pub enum Focus {
 pub enum FolderKind {
     Archive,
     Spam,
+    Trash,
 }
 
 /// State of an image attachment being fetched/decoded.
@@ -667,6 +668,8 @@ impl App {
                 }
                 // Merge any newly-appeared duplicate groups
                 self.merge_duplicate_groups();
+                // Prune folder lists of threads no longer on the device
+                self.prune_stale_folder_threads();
                 let _ = self.state.save();
                 self.sort_conversations();
                 self.loading = LoadingState::Idle;
@@ -888,14 +891,10 @@ impl App {
 
     /// Cycle to the next theme. `light` selects from the light theme list,
     /// otherwise from the dark theme list.
-    fn cycle_theme(&mut self, light: bool) {
+    fn cycle_theme(&mut self) {
         use crate::ui::theme;
         let current = theme::current_theme_name();
-        let next = if light {
-            theme::cycle_light(current)
-        } else {
-            theme::cycle_dark(current)
-        };
+        let next = theme::cycle_all(current);
         theme::set_theme(next);
         self.state.theme = Some(format!("{next}"));
         if let Err(e) = self.state.save() {
@@ -2137,9 +2136,16 @@ impl App {
                 }
             }
 
-            // Theme cycling
-            KeyCode::Char('t') => self.cycle_theme(false),
-            KeyCode::Char('T') => self.cycle_theme(true),
+            // Trash / Theme
+            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cycle_theme();
+            }
+            KeyCode::Char('t') => {
+                self.trash_selected_conversation();
+            }
+            KeyCode::Char('T') => {
+                self.open_folder_popup(FolderKind::Trash);
+            }
 
             _ => {}
         }
@@ -2286,8 +2292,9 @@ impl App {
             }
 
             // Theme cycling
-            KeyCode::Char('t') => self.cycle_theme(false),
-            KeyCode::Char('T') => self.cycle_theme(true),
+            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cycle_theme();
+            }
 
             _ => {}
         }
@@ -3423,6 +3430,21 @@ impl App {
         self.adjust_selection_after_hide();
     }
 
+    fn trash_selected_conversation(&mut self) {
+        let Some(idx) = self.selected_conversation_idx else {
+            return;
+        };
+        let Some(conv) = self.conversations.get(idx) else {
+            return;
+        };
+        let thread_id = conv.thread_id;
+        self.state.toggle_trash(thread_id);
+        if let Err(e) = self.state.save() {
+            self.set_status(format!("Failed to save state: {}", e));
+        }
+        self.adjust_selection_after_hide();
+    }
+
     fn adjust_selection_after_hide(&mut self) {
         let visible: Vec<usize> = self.visible_conversation_indices();
         if visible.is_empty() {
@@ -3435,6 +3457,18 @@ impl App {
                 .or(visible.last())
                 .copied();
         }
+    }
+
+    /// Remove thread IDs from archive/spam/trash that no longer exist in
+    /// the active conversations fetched from the device.
+    fn prune_stale_folder_threads(&mut self) {
+        let active: std::collections::HashSet<i64> =
+            self.conversations.iter().map(|c| c.thread_id).collect();
+        self.state
+            .archived_threads
+            .retain(|t| active.contains(t));
+        self.state.spam_threads.retain(|t| active.contains(t));
+        self.state.trash_threads.retain(|t| active.contains(t));
     }
 
     fn open_folder_popup(&mut self, kind: FolderKind) {
@@ -3773,6 +3807,7 @@ impl App {
         let mut ids = match self.folder_popup_kind {
             FolderKind::Archive => self.state.archived_threads.clone(),
             FolderKind::Spam => self.state.spam_threads.clone(),
+            FolderKind::Trash => self.state.trash_threads.clone(),
         };
         // Sort by most recent message first.
         ids.sort_by(|a, b| {

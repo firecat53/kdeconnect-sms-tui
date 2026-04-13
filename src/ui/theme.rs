@@ -65,9 +65,8 @@ impl FromStr for ThemeName {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Try serde (enum variant name) first, then display name.
         serde_json::from_str::<ThemeName>(&format!("\"{s}\"")).or_else(|_| {
-            DARK_THEMES
+            ALL_THEMES
                 .iter()
-                .chain(LIGHT_THEMES.iter())
                 .find(|t| t.display_name().eq_ignore_ascii_case(s))
                 .copied()
                 .ok_or(())
@@ -79,7 +78,7 @@ impl FromStr for ThemeName {
 // Dark / Light theme lists for cycling
 // ---------------------------------------------------------------------------
 
-const DARK_THEMES: &[ThemeName] = &[
+const ALL_THEMES: &[ThemeName] = &[
     ThemeName::Default,
     ThemeName::CatppuccinMocha,
     ThemeName::Nord,
@@ -89,9 +88,6 @@ const DARK_THEMES: &[ThemeName] = &[
     ThemeName::GruvboxDark,
     ThemeName::Dracula,
     ThemeName::RosePine,
-];
-
-const LIGHT_THEMES: &[ThemeName] = &[
     ThemeName::CatppuccinLatte,
     ThemeName::NordLight,
     ThemeName::SolarizedLight,
@@ -177,12 +173,8 @@ fn current() -> ThemePalette {
 // Cycling
 // ---------------------------------------------------------------------------
 
-pub fn cycle_dark(current_name: ThemeName) -> ThemeName {
-    cycle_in_list(DARK_THEMES, current_name)
-}
-
-pub fn cycle_light(current_name: ThemeName) -> ThemeName {
-    cycle_in_list(LIGHT_THEMES, current_name)
+pub fn cycle_all(current_name: ThemeName) -> ThemeName {
+    cycle_in_list(ALL_THEMES, current_name)
 }
 
 fn cycle_in_list(list: &[ThemeName], current_name: ThemeName) -> ThemeName {
@@ -631,35 +623,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cycle_dark_wraps() {
-        let last = *DARK_THEMES.last().unwrap();
-        assert_eq!(cycle_dark(last), DARK_THEMES[0]);
+    fn test_cycle_all_wraps() {
+        let last = *ALL_THEMES.last().unwrap();
+        assert_eq!(cycle_all(last), ALL_THEMES[0]);
     }
 
     #[test]
-    fn test_cycle_light_wraps() {
-        let last = *LIGHT_THEMES.last().unwrap();
-        assert_eq!(cycle_light(last), LIGHT_THEMES[0]);
+    fn test_cycle_all_advances() {
+        assert_eq!(cycle_all(ThemeName::Default), ThemeName::CatppuccinMocha);
     }
 
     #[test]
-    fn test_cycle_dark_from_light_returns_first() {
-        assert_eq!(cycle_dark(ThemeName::CatppuccinLatte), DARK_THEMES[0]);
-    }
-
-    #[test]
-    fn test_cycle_light_from_dark_returns_first() {
-        assert_eq!(cycle_light(ThemeName::Default), LIGHT_THEMES[0]);
-    }
-
-    #[test]
-    fn test_cycle_dark_advances() {
-        assert_eq!(cycle_dark(ThemeName::Default), ThemeName::CatppuccinMocha);
-    }
-
-    #[test]
-    fn test_cycle_light_advances() {
-        assert_eq!(cycle_light(ThemeName::CatppuccinLatte), ThemeName::NordLight);
+    fn test_cycle_all_crosses_dark_light() {
+        assert_eq!(cycle_all(ThemeName::RosePine), ThemeName::CatppuccinLatte);
     }
 
     #[test]
@@ -680,7 +656,7 @@ mod tests {
 
     #[test]
     fn test_all_palettes_constructible() {
-        for &name in DARK_THEMES.iter().chain(LIGHT_THEMES.iter()) {
+        for &name in ALL_THEMES.iter() {
             let _palette = palette_for(name);
         }
     }

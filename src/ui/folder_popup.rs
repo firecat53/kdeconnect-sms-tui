@@ -12,6 +12,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     let title = match app.folder_popup_kind {
         FolderKind::Archive => " Archive ",
         FolderKind::Spam => " Spam ",
+        FolderKind::Trash => " Trash ",
     };
 
     let thread_ids = app.folder_thread_ids();
@@ -37,6 +38,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         let empty_msg = match app.folder_popup_kind {
             FolderKind::Archive => "No archived conversations",
             FolderKind::Spam => "No spam conversations",
+            FolderKind::Trash => "No trashed conversations",
         };
         let inner = block.inner(popup_area);
         f.render_widget(block, popup_area);

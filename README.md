@@ -54,13 +54,13 @@ are saved per-conversation when you switch away.
 | `i`                            | Compose message (existing conversation) |
 | `d`                            | Open device selector                    |
 | `g`                            | Edit group name                         |
-| `a` / `s`                      | Archive / spam selected conversation    |
-| `A` / `S`                      | View archived / spam folder             |
+| `a` / `s` / `t`                | Archive / spam / trash selected conversation |
+| `A` / `S` / `T`                | View archived / spam / trash folder     |
 | `r`                            | Refresh conversations / reconnect       |
 | `/`                            | Search conversations by name or number  |
 | `n` / `p`                      | Next / previous search match            |
 | `Esc`                          | Clear search                            |
-| `t` / `T`                      | Cycle dark / light themes               |
+| `Ctrl+t`                       | Cycle themes                            |
 | `?`                            | Show help popup                         |
 | `q`                            | Quit                                    |
 
