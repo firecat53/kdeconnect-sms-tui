@@ -608,6 +608,8 @@ impl App {
                     let first_visible = self.visible_conversation_indices().first().copied();
                     self.selected_conversation_idx = first_visible;
                     self.request_selected_conversation_messages();
+                } else {
+                    self.request_conversation_attachments();
                 }
             }
             Err(e) => {
@@ -676,6 +678,8 @@ impl App {
                     let first_visible = self.visible_conversation_indices().first().copied();
                     self.selected_conversation_idx = first_visible;
                     self.request_selected_conversation_messages();
+                } else {
+                    self.request_conversation_attachments();
                 }
             }
             Err(e) => {
@@ -1127,6 +1131,7 @@ impl App {
                         .is_some_and(|c| c.thread_id == thread_id)
                     {
                         self.maybe_load_more_on_scroll();
+                        self.request_conversation_attachments();
                     }
                 }
             }
@@ -1676,7 +1681,8 @@ impl App {
         // so we match by checking if the path ends with the unique_identifier.
         let file_stem = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
 
-        // Update cached_path on matching attachments in all conversations
+        // Update cached_path on matching attachments and collect unique_identifiers
+        let mut matched_uids: Vec<String> = Vec::new();
         for conv in &mut self.conversations {
             for msg in &mut conv.messages {
                 for att in &mut msg.attachments {
@@ -1684,6 +1690,9 @@ impl App {
                         || file_path.contains(&att.unique_identifier)
                     {
                         att.cached_path = Some(path.clone());
+                        if !matched_uids.contains(&att.unique_identifier) {
+                            matched_uids.push(att.unique_identifier.clone());
+                        }
                     }
                 }
             }
@@ -1693,10 +1702,20 @@ impl App {
                         || file_path.contains(&att.unique_identifier)
                     {
                         att.cached_path = Some(path.clone());
+                        if !matched_uids.contains(&att.unique_identifier) {
+                            matched_uids.push(att.unique_identifier.clone());
+                        }
                     }
                 }
             }
         }
+
+        // Use matched unique_identifiers as keys, falling back to file_stem
+        let keys: Vec<String> = if matched_uids.is_empty() {
+            vec![file_stem.to_string()]
+        } else {
+            matched_uids
+        };
 
         // Decode image if applicable
         if let Some(ref picker) = self.picker {
@@ -1704,15 +1723,12 @@ impl App {
             let is_image = matches!(
                 ext.to_lowercase().as_str(),
                 "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "heic" | "heif"
-            ) || file_stem.split('.').next().is_some_and(|_| {
-                // Try to detect from the attachment metadata
-                self.conversations.iter().any(|c| {
-                    c.messages.iter().any(|m| {
-                        m.attachments.iter().any(|a| {
-                            (a.unique_identifier == file_stem
-                                || file_path.contains(&a.unique_identifier))
-                                && a.is_image()
-                        })
+            ) || self.conversations.iter().any(|c| {
+                c.messages.iter().any(|m| {
+                    m.attachments.iter().any(|a| {
+                        (a.unique_identifier == file_stem
+                            || file_path.contains(&a.unique_identifier))
+                            && a.is_image()
                     })
                 })
             });
@@ -1728,22 +1744,30 @@ impl App {
                     .and_then(|r| r.decode());
                 match load_result {
                     Ok(dyn_img) => {
-                        let protocol = picker.new_resize_protocol(dyn_img);
-                        self.image_states.insert(
-                            file_stem.to_string(),
-                            ImageState::Loaded(Box::new(protocol)),
-                        );
+                        for key in &keys {
+                            let protocol =
+                                picker.new_resize_protocol(dyn_img.clone());
+                            self.image_states.insert(
+                                key.clone(),
+                                ImageState::Loaded(Box::new(protocol)),
+                            );
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("Failed to decode image {}: {}", file_path, e);
-                        self.image_states
-                            .insert(file_stem.to_string(), ImageState::Failed(e.to_string()));
+                        let err_msg = e.to_string();
+                        for key in &keys {
+                            self.image_states
+                                .insert(key.clone(), ImageState::Failed(err_msg.clone()));
+                        }
                     }
                 }
             }
         }
 
-        self.pending_attachments.remove(file_stem);
+        for key in &keys {
+            self.pending_attachments.remove(key);
+        }
     }
 
     /// Request downloads for all image attachments in the currently selected conversation.
@@ -1976,12 +2000,14 @@ impl App {
                 self.select_prev_conversation();
                 self.restore_draft();
                 self.request_selected_conversation_messages();
+                self.request_conversation_attachments();
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.save_draft();
                 self.select_next_conversation();
                 self.restore_draft();
                 self.request_selected_conversation_messages();
+                self.request_conversation_attachments();
             }
 
             // Page through conversations
@@ -1993,6 +2019,7 @@ impl App {
                 }
                 self.restore_draft();
                 self.request_selected_conversation_messages();
+                self.request_conversation_attachments();
             }
             KeyCode::PageDown | KeyCode::Char('J') => {
                 self.save_draft();
@@ -2002,6 +2029,7 @@ impl App {
                 }
                 self.restore_draft();
                 self.request_selected_conversation_messages();
+                self.request_conversation_attachments();
             }
 
             // Enter conversation / focus compose
@@ -2010,6 +2038,7 @@ impl App {
                     self.pre_compose_focus = Focus::ConversationList;
                     self.focus = Focus::Compose;
                     self.request_selected_conversation_messages();
+                    self.request_conversation_attachments();
                 }
             }
 
@@ -2083,6 +2112,7 @@ impl App {
                     self.reset_message_selection();
                     self.restore_draft();
                     self.request_selected_conversation_messages();
+                    self.request_conversation_attachments();
                 }
             }
             // Previous search result (backward from current selection, wrapping)
@@ -2103,6 +2133,7 @@ impl App {
                     self.reset_message_selection();
                     self.restore_draft();
                     self.request_selected_conversation_messages();
+                    self.request_conversation_attachments();
                 }
             }
 
@@ -2972,6 +3003,7 @@ impl App {
             self.reset_message_selection();
             self.restore_draft();
             self.request_selected_conversation_messages();
+            self.request_conversation_attachments();
         }
     }
 
@@ -3445,6 +3477,7 @@ impl App {
                         self.message_scroll = 0;
                         self.reset_message_selection();
                         self.request_selected_conversation_messages();
+                        self.request_conversation_attachments();
                     }
                     self.focus = Focus::ConversationList;
                     self.needs_full_repaint = true;
@@ -4319,8 +4352,10 @@ fn clipboard_copy_image(path: &std::path::Path) {
 ///   by a few seconds between the queued and delivered states (especially
 ///   for MMS). We use multiple strategies:
 ///   1. If the incoming uid > 0 and matches an existing uid → duplicate.
-///   2. Same body + date within 5 seconds → duplicate (covers uid==0,
-///      mismatched-uid, and MMS timestamp drift).
+///   2. Same **non-empty** body + date within 5 seconds → duplicate (covers
+///      uid==0, mismatched-uid, and MMS timestamp drift). Empty bodies are
+///      excluded because MMS messages with only attachments (images, videos)
+///      all have empty body strings and would incorrectly dedup each other.
 ///
 /// Insert a message and return the insertion index, or `None` if it was a
 /// duplicate.
@@ -4333,8 +4368,10 @@ fn insert_message_sorted(messages: &mut Vec<Message>, msg: Message) -> Option<us
         if msg.uid != 0 && m.uid == msg.uid {
             return true;
         }
-        // Fallback: same body + date within a small window
-        m.body == msg.body && (m.date - msg.date).abs() <= TIMESTAMP_FUZZ_MS
+        // Fallback: same non-empty body + date within a small window.
+        // Skip when body is empty — MMS messages with only attachments
+        // share empty bodies and must not be collapsed.
+        !msg.body.is_empty() && m.body == msg.body && (m.date - msg.date).abs() <= TIMESTAMP_FUZZ_MS
     });
     if dominated {
         return None;
@@ -4347,6 +4384,7 @@ fn insert_message_sorted(messages: &mut Vec<Message>, msg: Message) -> Option<us
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::attachment::Attachment;
     use crate::models::message::{Address, MessageType};
 
     fn make_test_message(thread_id: i64, date: i64, body: &str) -> Message {
@@ -4672,6 +4710,50 @@ mod tests {
         insert_message_sorted(&mut messages, msg2);
 
         assert_eq!(messages.len(), 1, "same non-zero uid should dedup");
+    }
+
+    #[test]
+    fn test_insert_message_empty_body_mms_not_deduped() {
+        // MMS messages with only attachments (images, videos) have empty
+        // body strings.  Multiple such messages arriving within 5 seconds
+        // must NOT be collapsed — each carries distinct attachments.
+        let mut messages = Vec::new();
+
+        let mut msg1 = make_test_message(1, 1000, "");
+        msg1.uid = 0;
+        msg1.attachments = vec![Attachment {
+            part_id: 1,
+            mime_type: "image/jpeg".into(),
+            unique_identifier: "PART_1000_img1.jpg".into(),
+            cached_path: None,
+        }];
+        insert_message_sorted(&mut messages, msg1);
+
+        let mut msg2 = make_test_message(1, 2000, "");
+        msg2.uid = 0;
+        msg2.attachments = vec![Attachment {
+            part_id: 2,
+            mime_type: "video/mp4".into(),
+            unique_identifier: "PART_2000_vid.mp4".into(),
+            cached_path: None,
+        }];
+        insert_message_sorted(&mut messages, msg2);
+
+        let mut msg3 = make_test_message(1, 3000, "");
+        msg3.uid = 0;
+        msg3.attachments = vec![Attachment {
+            part_id: 3,
+            mime_type: "image/png".into(),
+            unique_identifier: "PART_3000_img2.png".into(),
+            cached_path: None,
+        }];
+        insert_message_sorted(&mut messages, msg3);
+
+        assert_eq!(
+            messages.len(),
+            3,
+            "empty-body MMS messages must not be deduplicated"
+        );
     }
 
     #[test]
