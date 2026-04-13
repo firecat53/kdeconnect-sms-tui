@@ -46,23 +46,23 @@ are saved per-conversation when you switch away.
 
 **Conversations/Messages**:
 
-| Key                            | Action                                  |
-|--------------------------------|-----------------------------------------|
-| `j`/`k` or `Up`/`Down`         | Next/Previous                           |
-| `J`/`K` or `PageDown`/`PageUp` | Page down / page up                     |
-| `h`/`l` or `Tab`               | Switch focus to messages panel          |
-| `i`                            | Compose message (existing conversation) |
-| `d`                            | Open device selector                    |
-| `g`                            | Edit group name                         |
+| Key                            | Action                                       |
+|--------------------------------|----------------------------------------------|
+| `j`/`k` or `Up`/`Down`         | Next/Previous                                |
+| `J`/`K` or `PageDown`/`PageUp` | Page down / page up                          |
+| `h`/`l` or `Tab`               | Switch focus to messages panel               |
+| `i`                            | Compose message (existing conversation)      |
+| `d`                            | Open device selector                         |
+| `g`                            | Edit group name                              |
 | `a` / `s` / `t`                | Archive / spam / trash selected conversation |
-| `A` / `S` / `T`                | View archived / spam / trash folder     |
-| `r`                            | Refresh conversations / reconnect       |
-| `/`                            | Search conversations by name or number  |
-| `n` / `p`                      | Next / previous search match            |
-| `Esc`                          | Clear search                            |
-| `Ctrl+t`                       | Cycle themes                            |
-| `?`                            | Show help popup                         |
-| `q`                            | Quit                                    |
+| `A` / `S` / `T`                | View archived / spam / trash folder          |
+| `r`                            | Refresh conversations / reconnect            |
+| `/`                            | Search conversations by name or number       |
+| `n` / `p`                      | Next / previous search match                 |
+| `Esc`                          | Clear search                                 |
+| `Ctrl+t`                       | Cycle themes                                 |
+| `?`                            | Show help popup                              |
+| `q`                            | Quit                                         |
 
 **Messages panel only**:
 
