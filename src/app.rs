@@ -668,8 +668,6 @@ impl App {
                 }
                 // Merge any newly-appeared duplicate groups
                 self.merge_duplicate_groups();
-                // Prune folder lists of threads no longer on the device
-                self.prune_stale_folder_threads();
                 let _ = self.state.save();
                 self.sort_conversations();
                 self.loading = LoadingState::Idle;
@@ -3459,18 +3457,6 @@ impl App {
         }
     }
 
-    /// Remove thread IDs from archive/spam/trash that no longer exist in
-    /// the active conversations fetched from the device.
-    fn prune_stale_folder_threads(&mut self) {
-        let active: std::collections::HashSet<i64> =
-            self.conversations.iter().map(|c| c.thread_id).collect();
-        self.state
-            .archived_threads
-            .retain(|t| active.contains(t));
-        self.state.spam_threads.retain(|t| active.contains(t));
-        self.state.trash_threads.retain(|t| active.contains(t));
-    }
-
     fn open_folder_popup(&mut self, kind: FolderKind) {
         self.folder_popup_kind = kind;
         self.folder_popup_idx = 0;
@@ -3809,6 +3795,8 @@ impl App {
             FolderKind::Spam => self.state.spam_threads.clone(),
             FolderKind::Trash => self.state.trash_threads.clone(),
         };
+        // Only show threads that exist in the current conversation list.
+        ids.retain(|t| self.conversations.iter().any(|c| c.thread_id == *t));
         // Sort by most recent message first.
         ids.sort_by(|a, b| {
             let date_a = self
