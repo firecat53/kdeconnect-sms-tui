@@ -1,5 +1,8 @@
 # kdeconnect-sms-tui
 
+> NOTE: Code moved to https://git.firecat53.me/firecat53/nixos. Issues and PRs
+> still accepted on Github for now. Github repo maintained as a read-only mirror.
+
 Terminal UI for sending and receiving SMS/MMS via KDE Connect.
 
 Disclaimer - project was coded using Claude and other AI tools
