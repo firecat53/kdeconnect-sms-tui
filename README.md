@@ -1,5 +1,9 @@
 # kdeconnect-sms-tui
 
+**NOTE: Since a majority of texting for me has moved to RCS, I unfortunately will
+stop using/developing this project unless RCS is able to be added to kdeconnect
+at some point.**
+
 > NOTE: Code moved to https://git.firecat53.me/firecat53/nixos. Issues and PRs
 > still accepted on Github for now. Github repo maintained as a read-only mirror.
 
